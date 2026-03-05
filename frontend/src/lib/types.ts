@@ -166,3 +166,63 @@ export interface WeightsResponse {
   weights: ScoringWeight[];
   total_weight: number;
 }
+
+// Metrics types
+export type MetricCategory = "retention" | "economics";
+
+export interface MetricEntry {
+  id: string;
+  idea_id: string;
+  user_id: string;
+  category: MetricCategory;
+  metric_key: string;
+  value: number;
+  sample_size: number | null;
+  period_start: string;
+  period_end: string;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MetricEntryListResponse {
+  items: MetricEntry[];
+  total: number;
+}
+
+export interface MetricWithBenchmark {
+  metric_key: string;
+  label: string;
+  unit: string;
+  category: string;
+  latest_value: number | null;
+  sample_size: number | null;
+  benchmark_value: number | null;
+  benchmark_direction: string | null;
+  passes_benchmark: boolean | null;
+  history: MetricEntry[];
+}
+
+export interface ComputedMetric {
+  metric_key: string;
+  label: string;
+  unit: string;
+  value: number | null;
+  note: string | null;
+}
+
+export interface TriggerState {
+  key: string;
+  label: string;
+  category: string;
+  state: string;
+  fired: boolean;
+  metric_key: string | null;
+}
+
+export interface MetricsDashboardResponse {
+  retention_metrics: MetricWithBenchmark[];
+  economics_metrics: MetricWithBenchmark[];
+  computed_metrics: ComputedMetric[];
+  trigger_states: TriggerState[];
+}

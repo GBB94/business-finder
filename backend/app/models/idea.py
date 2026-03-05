@@ -103,3 +103,4 @@ class Idea(Base):
     evidence = relationship("Evidence", back_populates="idea", cascade="all, delete-orphan")
     research_jobs = relationship("ResearchJob", back_populates="idea")
     monthly_reviews = relationship("MonthlyReview", back_populates="idea", cascade="all, delete-orphan")
+    metric_entries = relationship("MetricEntry", back_populates="idea", cascade="all, delete-orphan")

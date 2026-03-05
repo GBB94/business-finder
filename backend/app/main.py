@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import engine, Base, SessionLocal
 from app.routers import health
-from app.routers import ideas, scoring_weights, scores, evidence, monthly_reviews, founder_profile
+from app.routers import ideas, scoring_weights, scores, evidence, monthly_reviews, founder_profile, metrics
 
 
 def _seed_scoring_weights(db):
@@ -61,3 +61,4 @@ app.include_router(scores.router)
 app.include_router(evidence.router)
 app.include_router(monthly_reviews.router)
 app.include_router(founder_profile.router)
+app.include_router(metrics.router)

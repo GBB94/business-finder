@@ -5,6 +5,12 @@ import { useState } from "react";
 interface KillTrigger {
   label: string;
   fired: boolean;
+  category?: string;
+  state?: string;
+  metric_key?: string | null;
+  min_sample_size?: number;
+  sample_window_days?: number;
+  first_breach_at?: string | null;
 }
 
 interface KillTriggerEditorProps {
@@ -21,6 +27,27 @@ function slugify(label: string): string {
     .replace(/^_|_$/g, "");
 }
 
+function stateDotColor(trigger: KillTrigger): string {
+  const state = trigger.state;
+  if (state === "red" || trigger.fired) return "bg-red-500";
+  if (state === "yellow") return "bg-yellow-500";
+  return "bg-gray-600";
+}
+
+function stateTextColor(trigger: KillTrigger): string {
+  const state = trigger.state;
+  if (state === "red" || trigger.fired) return "text-red-400";
+  if (state === "yellow") return "text-amber-400";
+  return "text-gray-400";
+}
+
+function stateBorderBg(trigger: KillTrigger): string {
+  const state = trigger.state;
+  if (state === "red" || trigger.fired) return "border-red-800 bg-red-950/30";
+  if (state === "yellow") return "border-amber-800 bg-amber-950/20";
+  return "border-gray-800 bg-gray-900";
+}
+
 export default function KillTriggerEditor({
   triggers,
   onSave,
@@ -34,10 +61,18 @@ export default function KillTriggerEditor({
   const entries = Object.entries(editing ? draft : triggers);
 
   const handleToggleFired = (key: string) => {
-    setDraft((prev) => ({
-      ...prev,
-      [key]: { ...prev[key], fired: !prev[key].fired },
-    }));
+    setDraft((prev) => {
+      const t = prev[key];
+      const newFired = !t.fired;
+      return {
+        ...prev,
+        [key]: {
+          ...t,
+          fired: newFired,
+          state: newFired ? "red" : "grey",
+        },
+      };
+    });
   };
 
   const handleLabelChange = (key: string, label: string) => {
@@ -59,7 +94,7 @@ export default function KillTriggerEditor({
     const newKey = `custom_${Date.now()}`;
     setDraft((prev) => ({
       ...prev,
-      [newKey]: { label: "", fired: false },
+      [newKey]: { label: "", fired: false, category: "soft", state: "grey" },
     }));
   };
 
@@ -90,9 +125,11 @@ export default function KillTriggerEditor({
         <div
           key={key}
           className={`flex items-center gap-2 rounded-lg border p-2 ${
-            trigger.fired
-              ? "border-red-800 bg-red-950/30"
-              : "border-gray-800 bg-gray-900"
+            editing
+              ? trigger.fired
+                ? "border-red-800 bg-red-950/30"
+                : "border-gray-800 bg-gray-900"
+              : stateBorderBg(trigger)
           }`}
         >
           {editing ? (
@@ -134,20 +171,32 @@ export default function KillTriggerEditor({
           ) : (
             <>
               <span
-                className={`shrink-0 h-2.5 w-2.5 rounded-full ${
-                  trigger.fired ? "bg-red-500" : "bg-gray-600"
-                }`}
+                className={`shrink-0 h-2.5 w-2.5 rounded-full ${stateDotColor(trigger)}`}
               />
               <span
-                className={`flex-1 text-sm ${
-                  trigger.fired ? "text-red-400" : "text-gray-400"
-                }`}
+                className={`flex-1 text-sm ${stateTextColor(trigger)}`}
               >
                 {trigger.label}
               </span>
-              {trigger.fired && (
+              {trigger.category && (
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                    trigger.category === "hard"
+                      ? "bg-red-900/40 text-red-400"
+                      : "bg-amber-900/40 text-amber-400"
+                  }`}
+                >
+                  {trigger.category}
+                </span>
+              )}
+              {(trigger.state === "red" || trigger.fired) && (
                 <span className="text-[10px] font-medium text-red-400 uppercase">
                   Fired
+                </span>
+              )}
+              {trigger.state === "yellow" && !trigger.fired && (
+                <span className="text-[10px] font-medium text-amber-400 uppercase">
+                  Warning
                 </span>
               )}
             </>

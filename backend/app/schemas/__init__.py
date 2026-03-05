@@ -32,6 +32,12 @@ from app.schemas.scoring_weight import (
     WeightResponse,
     WeightsResponse,
 )
+from app.schemas.metric_entry import (
+    MetricEntryCreate,
+    MetricEntryResponse,
+    MetricEntryListResponse,
+    MetricsDashboardResponse,
+)
 
 __all__ = [
     "IdeaCreate",
@@ -56,4 +62,8 @@ __all__ = [
     "WeightsUpdateRequest",
     "WeightResponse",
     "WeightsResponse",
+    "MetricEntryCreate",
+    "MetricEntryResponse",
+    "MetricEntryListResponse",
+    "MetricsDashboardResponse",
 ]

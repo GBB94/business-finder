@@ -22,15 +22,71 @@ ALLOWED_TRANSITIONS: dict[str, list[str]] = {
 DEFAULT_KILL_TRIGGERS = {
     "no_paying_customers_90d": {
         "label": "No paying customers after 90 days of validation",
+        "category": "hard",
+        "state": "grey",
         "fired": False,
     },
     "runway_below_floor": {
         "label": "Runway drops below floor months",
+        "category": "hard",
+        "state": "grey",
         "fired": False,
     },
     "founder_lost_conviction": {
         "label": "Founder lost conviction in the problem",
+        "category": "soft",
+        "state": "grey",
         "fired": False,
+    },
+    "activation_below_floor": {
+        "label": "Activation rate below floor",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 30,
+        "sample_window_days": 30,
+        "metric_key": "activation_rate",
+        "first_breach_at": None,
+    },
+    "churn_above_ceiling": {
+        "label": "Monthly churn above ceiling",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 20,
+        "sample_window_days": 60,
+        "metric_key": "monthly_churn",
+        "first_breach_at": None,
+    },
+    "cac_payback_over_12": {
+        "label": "CAC payback exceeds 12 months",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 10,
+        "sample_window_days": 30,
+        "metric_key": None,
+        "first_breach_at": None,
+    },
+    "poor_activation": {
+        "label": "Activation consistently below threshold",
+        "category": "soft",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 30,
+        "sample_window_days": 30,
+        "metric_key": "activation_rate",
+        "first_breach_at": None,
+    },
+    "bad_margins": {
+        "label": "Gross margins below sustainable level",
+        "category": "soft",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 3,
+        "sample_window_days": 60,
+        "metric_key": "gross_margin",
+        "first_breach_at": None,
     },
 }
 
@@ -88,6 +144,14 @@ def unarchive_idea(db: Session, idea: Idea) -> Idea:
 _VALIDATION_STAGES = {"validating", "building", "retention", "growing"}
 
 
+def _ensure_trigger_shape(trigger: dict) -> dict:
+    """Ensure old-format triggers have the new fields with defaults."""
+    trigger.setdefault("category", "hard")
+    trigger.setdefault("state", "grey")
+    trigger.setdefault("fired", False)
+    return trigger
+
+
 def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
     """Evaluate auto-evaluable kill triggers and return updated triggers dict.
 
@@ -96,6 +160,10 @@ def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
     are never cleared.
     """
     triggers = copy.deepcopy(idea.kill_triggers) if idea.kill_triggers else {}
+
+    # Ensure all triggers have the new shape (graceful migration)
+    for key in triggers:
+        _ensure_trigger_shape(triggers[key])
 
     # --- no_paying_customers_90d ---
     trigger = triggers.get("no_paying_customers_90d")
@@ -114,6 +182,7 @@ def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
                 )
                 if pre_sale_count == 0:
                     trigger["fired"] = True
+                    trigger["state"] = "red"
 
     # --- runway_below_floor ---
     trigger = triggers.get("runway_below_floor")
@@ -123,7 +192,20 @@ def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
             runway_remaining = profile.current_savings / profile.monthly_burn_rate
             if runway_remaining < profile.runway_floor_months:
                 trigger["fired"] = True
+                trigger["state"] = "red"
 
     # founder_lost_conviction — manual only, never auto-evaluated
+
+    # --- metric-driven triggers ---
+    from app.services.metrics_service import evaluate_metric_triggers
+    metric_states = evaluate_metric_triggers(db, idea)
+    for ms in metric_states:
+        key = ms["key"]
+        if key in triggers:
+            # Don't clear manually fired triggers
+            if triggers[key].get("fired") and ms["state"] != "red":
+                continue
+            triggers[key]["state"] = ms["state"]
+            triggers[key]["fired"] = ms["fired"]
 
     return triggers

@@ -18,8 +18,9 @@ import EvidenceTimeline from "@/components/EvidenceTimeline";
 import EvidenceForm from "@/components/EvidenceForm";
 import MonthlyReviewForm from "@/components/MonthlyReviewForm";
 import KillTriggerEditor from "@/components/KillTriggerEditor";
+import MetricsPanel from "@/components/MetricsPanel";
 
-const TABS = ["Overview", "Score", "Evidence", "Reviews"] as const;
+const TABS = ["Overview", "Score", "Evidence", "Metrics", "Reviews"] as const;
 type Tab = (typeof TABS)[number];
 
 const STATUS_TRANSITIONS: Record<string, { label: string; target: string }[]> = {
@@ -428,6 +429,10 @@ export default function IdeaDetailPage() {
             />
           )}
         </div>
+      )}
+
+      {activeTab === "Metrics" && (
+        <MetricsPanel ideaId={ideaId} />
       )}
 
       {activeTab === "Reviews" && (

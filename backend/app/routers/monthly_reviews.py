@@ -12,7 +12,8 @@ from app.schemas.monthly_review import (
     MonthlyReviewResponse,
     MonthlyReviewListResponse,
 )
-from app.services.idea_service import transition_status
+from app.services.idea_service import transition_status, evaluate_kill_triggers
+from app.services.metrics_service import build_metrics_snapshot
 
 router = APIRouter(prefix="/api/ideas/{idea_id}/reviews", tags=["monthly-reviews"])
 
@@ -30,11 +31,24 @@ def create_review(
 ):
     idea = _get_idea_or_404(idea_id, db)
 
+    # Auto-populate metrics snapshot if not provided
+    metrics_snapshot = body.metrics_snapshot
+    if metrics_snapshot is None:
+        metrics_snapshot = build_metrics_snapshot(db, idea)
+
+    # Auto-populate kill triggers fired
+    current_triggers = evaluate_kill_triggers(db, idea)
+    fired_labels = [
+        t["label"] for t in current_triggers.values()
+        if t.get("fired") or t.get("state") == "red"
+    ]
+
     review = MonthlyReview(
         idea_id=idea_id,
         user_id=settings.DEFAULT_USER_ID,
         review_date=body.review_date,
-        metrics_snapshot=body.metrics_snapshot,
+        metrics_snapshot=metrics_snapshot,
+        kill_triggers_fired=fired_labels if fired_labels else None,
         decision=body.decision,
         reasoning=body.reasoning,
         next_hypothesis=body.next_hypothesis,

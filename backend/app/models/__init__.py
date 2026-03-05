@@ -5,6 +5,7 @@ from app.models.research_job import ResearchJob, JobType, JobStatus
 from app.models.founder_profile import FounderProfile
 from app.models.monthly_review import MonthlyReview, ReviewDecision
 from app.models.config import ScoringWeight, SCORING_DIMENSIONS, DEFAULT_WEIGHTS
+from app.models.metric_entry import MetricEntry, MetricCategory
 
 __all__ = [
     "Idea", "IdeaStatus", "GateStatus", "OfferLadderRung", "ProductUseFrequency", "PaymentModel",
@@ -14,4 +15,5 @@ __all__ = [
     "FounderProfile",
     "MonthlyReview", "ReviewDecision",
     "ScoringWeight", "SCORING_DIMENSIONS", "DEFAULT_WEIGHTS",
+    "MetricEntry", "MetricCategory",
 ]
