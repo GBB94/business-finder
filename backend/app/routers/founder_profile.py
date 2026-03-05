@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.database import get_db
+from app.models.founder_profile import FounderProfile
+from app.schemas.founder_profile import (
+    FounderProfileUpsert,
+    FounderProfileResponse,
+)
+
+router = APIRouter(prefix="/api/profile", tags=["founder-profile"])
+
+
+def _compute_runway(profile: FounderProfile) -> Optional[float]:
+    if profile.monthly_burn_rate and profile.monthly_burn_rate > 0:
+        return round(profile.current_savings / profile.monthly_burn_rate, 1)
+    return None
+
+
+def _respond(profile: FounderProfile) -> FounderProfileResponse:
+    resp = FounderProfileResponse.model_validate(profile)
+    resp.runway_months_remaining = _compute_runway(profile)
+    return resp
+
+
+@router.get("", response_model=FounderProfileResponse)
+def get_profile(db: Session = Depends(get_db)):
+    profile = (
+        db.query(FounderProfile)
+        .filter_by(user_id=settings.DEFAULT_USER_ID)
+        .first()
+    )
+    if not profile:
+        profile = FounderProfile(user_id=settings.DEFAULT_USER_ID)
+        db.add(profile)
+        db.commit()
+        db.refresh(profile)
+    return _respond(profile)
+
+
+@router.put("", response_model=FounderProfileResponse)
+def upsert_profile(body: FounderProfileUpsert, db: Session = Depends(get_db)):
+    profile = (
+        db.query(FounderProfile)
+        .filter_by(user_id=settings.DEFAULT_USER_ID)
+        .first()
+    )
+    if not profile:
+        profile = FounderProfile(user_id=settings.DEFAULT_USER_ID)
+        db.add(profile)
+
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(profile, k, v)
+
+    db.commit()
+    db.refresh(profile)
+    return _respond(profile)

@@ -8,6 +8,7 @@ from typing import Optional
 from sqlalchemy import String, Text, Float, Integer, DateTime, Enum, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import default_user_id
 from app.database import Base
 
 
@@ -56,7 +57,7 @@ class Idea(Base):
     __tablename__ = "ideas"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False, default=default_user_id)
 
     name: Mapped[str] = mapped_column(Text, nullable=False)
     one_liner: Mapped[str] = mapped_column(Text, nullable=False, default="")

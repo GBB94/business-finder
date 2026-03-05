@@ -8,6 +8,7 @@ from typing import Optional
 from sqlalchemy import String, Integer, DateTime, Enum, JSON, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import default_user_id
 from app.database import Base
 
 
@@ -32,7 +33,7 @@ class ResearchJob(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     idea_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("ideas.id"), nullable=True, index=True)
-    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True, default=default_user_id)
 
     job_type: Mapped[str] = mapped_column(Enum(JobType), nullable=False)
     status: Mapped[str] = mapped_column(Enum(JobStatus), nullable=False, default=JobStatus.queued)

@@ -4,9 +4,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import String, Text, Float, Integer, DateTime, JSON, ForeignKey
+from sqlalchemy import String, Text, Float, Integer, DateTime, JSON, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.config import default_user_id
 from app.database import Base
 
 
@@ -16,10 +17,13 @@ def _utcnow():
 
 class Score(Base):
     __tablename__ = "scores"
+    __table_args__ = (
+        UniqueConstraint("idea_id", "user_id", name="uq_score_idea_user"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     idea_id: Mapped[str] = mapped_column(String(36), ForeignKey("ideas.id"), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True, default=default_user_id)
 
     # 11 scoring dimensions: score (1-5) + note
     problem_severity_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

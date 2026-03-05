@@ -1,4 +1,3 @@
-import uuid
 from pydantic_settings import BaseSettings
 
 
@@ -14,3 +13,8 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def default_user_id() -> str:
+    """Callable default for model user_id columns."""
+    return settings.DEFAULT_USER_ID

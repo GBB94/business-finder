@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Shell from "@/components/Shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -23,7 +24,7 @@ export default function RootLayout({
         className="bg-gray-950 text-gray-100 antialiased"
         style={{ fontFamily: "'DM Sans', sans-serif" }}
       >
-        {children}
+        <Shell>{children}</Shell>
       </body>
     </html>
   );
