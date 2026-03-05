@@ -12,6 +12,7 @@ IdeaStatusType = Literal[
     "discovery", "scoring", "validating", "building",
     "retention", "growing", "killed", "parked",
 ]
+GateStatusType = Literal["not_started", "in_progress", "passed", "failed"]
 
 
 class IdeaCreate(BaseModel):
@@ -40,6 +41,10 @@ class IdeaUpdate(BaseModel):
     activation_event: Optional[str] = None
     payment_model: Optional[PaymentModelType] = None
     expected_international_pct: Optional[int] = None
+    kill_triggers: Optional[dict] = None
+    gate_1_status: Optional[GateStatusType] = None
+    gate_2_status: Optional[GateStatusType] = None
+    gate_3_status: Optional[GateStatusType] = None
 
 
 class IdeaStatusTransition(BaseModel):

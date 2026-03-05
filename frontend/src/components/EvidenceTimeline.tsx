@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Evidence, GateLabel, EvidenceType, Sentiment } from "@/lib/types";
 
 const EVIDENCE_TYPE_LABELS: Record<string, string> = {
@@ -13,6 +14,14 @@ const EVIDENCE_TYPE_LABELS: Record<string, string> = {
   financial_metric: "Financial Metric",
   outreach_metric: "Outreach Metric",
   note: "Note",
+};
+
+const GATE_LABELS: Record<string, string> = {
+  discovery: "Discovery",
+  scoring: "Scoring",
+  "1": "Gate 1",
+  "2": "Gate 2",
+  "3": "Gate 3",
 };
 
 const GATE_OPTIONS: { value: string; label: string }[] = [
@@ -39,12 +48,69 @@ function sentimentBadge(sentiment: Sentiment) {
   return colors[sentiment] ?? colors.neutral;
 }
 
+function humanizeKey(key: string): string {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function renderValue(val: unknown): string {
+  if (val === null || val === undefined) return "—";
+  if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+    return String(val);
+  }
+  return JSON.stringify(val, null, 2);
+}
+
 interface EvidenceTimelineProps {
   evidence: Evidence[];
   onAdd: () => void;
   filterGate: string;
   filterType: string;
   onFilterChange: (gate: string, type: string) => void;
+}
+
+function EvidenceContentSection({ ev }: { ev: Evidence }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (ev.content_purged) {
+    return (
+      <p className="mt-2 text-xs text-gray-600 italic">Content purged</p>
+    );
+  }
+
+  if (!ev.content || Object.keys(ev.content).length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="text-xs text-indigo-400 hover:text-indigo-300"
+      >
+        {expanded ? "Hide details" : "Show details"}
+      </button>
+      {expanded && (
+        <div className="mt-1.5 rounded bg-gray-800/50 p-2">
+          <table className="w-full text-xs">
+            <tbody>
+              {Object.entries(ev.content).map(([key, val]) => (
+                <tr key={key} className="border-b border-gray-800 last:border-0">
+                  <td className="py-1 pr-3 font-medium text-gray-500 align-top whitespace-nowrap">
+                    {humanizeKey(key)}
+                  </td>
+                  <td className="py-1 text-gray-300 whitespace-pre-wrap break-words">
+                    {renderValue(val)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function EvidenceTimeline({
@@ -123,9 +189,12 @@ export default function EvidenceTimeline({
                 className="rounded-lg border border-gray-800 bg-gray-900 p-3"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[10px] uppercase text-gray-500">
                       {EVIDENCE_TYPE_LABELS[ev.evidence_type] ?? ev.evidence_type}
+                    </span>
+                    <span className="rounded bg-indigo-900/40 px-1.5 py-0.5 text-[10px] text-indigo-400">
+                      {GATE_LABELS[ev.gate] ?? ev.gate}
                     </span>
                     <h4 className="text-sm font-medium text-gray-200">
                       {ev.title}
@@ -149,6 +218,7 @@ export default function EvidenceTimeline({
                     {ev.source_type !== "other" ? ev.source_type : "source"}
                   </a>
                 )}
+                <EvidenceContentSection ev={ev} />
                 {ev.tags && ev.tags.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {ev.tags.map((tag) => (

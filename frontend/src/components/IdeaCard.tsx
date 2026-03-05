@@ -36,8 +36,18 @@ export default function IdeaCard({ idea, onClick }: IdeaCardProps) {
 
   return (
     <button
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("application/ideascope-id", idea.id);
+        e.dataTransfer.setData("application/ideascope-status", idea.status);
+        e.dataTransfer.effectAllowed = "move";
+        (e.currentTarget as HTMLElement).style.opacity = "0.5";
+      }}
+      onDragEnd={(e) => {
+        (e.currentTarget as HTMLElement).style.opacity = "1";
+      }}
       onClick={() => onClick(idea)}
-      className={`w-full text-left rounded-lg border p-3 transition-colors hover:border-gray-600 ${
+      className={`w-full text-left rounded-lg border p-3 transition-colors hover:border-gray-600 cursor-grab active:cursor-grabbing ${
         hasDisqualifier ? "border-red-800" : "border-gray-800"
       } bg-gray-900`}
     >

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
 from app.models.idea import Idea, IdeaStatus
+from app.models.founder_profile import FounderProfile
 
 ALLOWED_TRANSITIONS: dict[str, list[str]] = {
     "discovery": ["scoring", "killed", "parked"],
@@ -81,3 +83,47 @@ def unarchive_idea(db: Session, idea: Idea) -> Idea:
     db.commit()
     db.refresh(idea)
     return idea
+
+
+_VALIDATION_STAGES = {"validating", "building", "retention", "growing"}
+
+
+def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
+    """Evaluate auto-evaluable kill triggers and return updated triggers dict.
+
+    Only updates triggers that can be auto-evaluated. Manual triggers
+    (founder_lost_conviction) are never auto-set. Already-fired triggers
+    are never cleared.
+    """
+    triggers = copy.deepcopy(idea.kill_triggers) if idea.kill_triggers else {}
+
+    # --- no_paying_customers_90d ---
+    trigger = triggers.get("no_paying_customers_90d")
+    if trigger and not trigger.get("fired"):
+        status = idea.status if isinstance(idea.status, str) else idea.status.value
+        if status in _VALIDATION_STAGES:
+            created = idea.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            days_since_creation = (datetime.now(timezone.utc) - created).days
+            if days_since_creation >= 90:
+                pre_sale_count = sum(
+                    1 for ev in idea.evidence
+                    if (ev.evidence_type if isinstance(ev.evidence_type, str)
+                        else ev.evidence_type.value) == "pre_sale"
+                )
+                if pre_sale_count == 0:
+                    trigger["fired"] = True
+
+    # --- runway_below_floor ---
+    trigger = triggers.get("runway_below_floor")
+    if trigger and not trigger.get("fired"):
+        profile = db.query(FounderProfile).filter_by(user_id=idea.user_id).first()
+        if profile and profile.monthly_burn_rate > 0:
+            runway_remaining = profile.current_savings / profile.monthly_burn_rate
+            if runway_remaining < profile.runway_floor_months:
+                trigger["fired"] = True
+
+    # founder_lost_conviction — manual only, never auto-evaluated
+
+    return triggers

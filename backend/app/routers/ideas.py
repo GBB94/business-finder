@@ -20,6 +20,7 @@ from app.services.idea_service import (
     transition_status,
     seed_kill_triggers,
     compute_days_in_stage,
+    evaluate_kill_triggers,
     archive_idea,
     unarchive_idea,
 )
@@ -27,12 +28,22 @@ from app.services.idea_service import (
 router = APIRouter(prefix="/api/ideas", tags=["ideas"])
 
 
-def _enrich(idea: Idea) -> IdeaResponse:
+def _enrich(idea: Idea, db: Session) -> IdeaResponse:
     latest_score = None
     if idea.scores:
         latest_score = max(idea.scores, key=lambda s: s.scored_at)
     wt = latest_score.weighted_total if latest_score else None
     days = compute_days_in_stage(idea)
+
+    # Evaluate kill triggers on read
+    if idea.kill_triggers:
+        updated_triggers = evaluate_kill_triggers(db, idea)
+        if updated_triggers != idea.kill_triggers:
+            idea.kill_triggers = updated_triggers
+            db.add(idea)
+            db.commit()
+            db.refresh(idea)
+
     resp = IdeaResponse.model_validate(idea)
     resp.weighted_total = wt
     resp.days_in_stage = days
@@ -49,7 +60,7 @@ def create_idea(body: IdeaCreate, db: Session = Depends(get_db)):
     db.add(idea)
     db.commit()
     db.refresh(idea)
-    return _enrich(idea)
+    return _enrich(idea, db)
 
 
 @router.get("", response_model=IdeaListResponse)
@@ -73,7 +84,7 @@ def list_ideas(
 
     ideas = q.all()
     return IdeaListResponse(
-        items=[_enrich(i) for i in ideas],
+        items=[_enrich(i, db) for i in ideas],
         total=len(ideas),
     )
 
@@ -98,7 +109,7 @@ def update_idea(idea_id: str, body: IdeaUpdate, db: Session = Depends(get_db)):
     db.add(idea)
     db.commit()
     db.refresh(idea)
-    return _enrich(idea)
+    return _enrich(idea, db)
 
 
 @router.post("/{idea_id}/transition", response_model=IdeaResponse)
@@ -110,18 +121,18 @@ def transition_idea(
         idea = transition_status(db, idea, body.new_status)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return _enrich(idea)
+    return _enrich(idea, db)
 
 
 @router.post("/{idea_id}/archive", response_model=IdeaResponse)
 def archive(idea_id: str, db: Session = Depends(get_db)):
     idea = _get_idea_or_404(idea_id, db)
     idea = archive_idea(db, idea)
-    return _enrich(idea)
+    return _enrich(idea, db)
 
 
 @router.post("/{idea_id}/unarchive", response_model=IdeaResponse)
 def unarchive(idea_id: str, db: Session = Depends(get_db)):
     idea = _get_idea_or_404(idea_id, db)
     idea = unarchive_idea(db, idea)
-    return _enrich(idea)
+    return _enrich(idea, db)

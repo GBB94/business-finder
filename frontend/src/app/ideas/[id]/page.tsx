@@ -11,10 +11,13 @@ import type {
   MonthlyReview,
   MonthlyReviewListResponse,
   WeightsResponse,
+  GateStatus,
 } from "@/lib/types";
 import ScoreCard from "@/components/ScoreCard";
 import EvidenceTimeline from "@/components/EvidenceTimeline";
 import EvidenceForm from "@/components/EvidenceForm";
+import MonthlyReviewForm from "@/components/MonthlyReviewForm";
+import KillTriggerEditor from "@/components/KillTriggerEditor";
 
 const TABS = ["Overview", "Score", "Evidence", "Reviews"] as const;
 type Tab = (typeof TABS)[number];
@@ -53,6 +56,19 @@ const STATUS_TRANSITIONS: Record<string, { label: string; target: string }[]> = 
   parked: [{ label: "Resurrect", target: "discovery" }],
 };
 
+const GATE_STATUSES: { value: GateStatus; label: string; color: string }[] = [
+  { value: "not_started", label: "Not Started", color: "bg-gray-700 text-gray-400" },
+  { value: "in_progress", label: "In Progress", color: "bg-yellow-600 text-white" },
+  { value: "passed", label: "Passed", color: "bg-green-600 text-white" },
+  { value: "failed", label: "Failed", color: "bg-red-600 text-white" },
+];
+
+const GATES = [
+  { field: "gate_1_status" as const, label: "Gate 1 — Problem Worth Solving" },
+  { field: "gate_2_status" as const, label: "Gate 2 — Solution People Pay For" },
+  { field: "gate_3_status" as const, label: "Gate 3 — Repeatable Growth" },
+];
+
 export default function IdeaDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -65,6 +81,8 @@ export default function IdeaDetailPage() {
   const [weights, setWeights] = useState<WeightsResponse | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
   const [showEvidenceForm, setShowEvidenceForm] = useState(false);
+  const [showReviewForm, setShowReviewForm] = useState(false);
+  const [editingTriggers, setEditingTriggers] = useState(false);
   const [filterGate, setFilterGate] = useState("");
   const [filterType, setFilterType] = useState("");
 
@@ -149,6 +167,54 @@ export default function IdeaDetailPage() {
       setEvidence(updated.items);
     } catch (err) {
       console.error("Evidence submit failed:", err);
+    }
+  };
+
+  const handleReviewSubmit = async (data: Record<string, unknown>) => {
+    try {
+      await apiFetch(`/api/ideas/${ideaId}/reviews`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
+      setShowReviewForm(false);
+      const [ideaData, reviewsData] = await Promise.all([
+        apiFetch<Idea>(`/api/ideas/${ideaId}`),
+        apiFetch<MonthlyReviewListResponse>(`/api/ideas/${ideaId}/reviews`),
+      ]);
+      setIdea(ideaData);
+      setReviews(reviewsData.items);
+    } catch (err) {
+      console.error("Review submit failed:", err);
+    }
+  };
+
+  const handleGateChange = async (
+    field: "gate_1_status" | "gate_2_status" | "gate_3_status",
+    value: GateStatus
+  ) => {
+    try {
+      const updated = await apiFetch<Idea>(`/api/ideas/${ideaId}`, {
+        method: "PUT",
+        body: JSON.stringify({ [field]: value }),
+      });
+      setIdea(updated);
+    } catch (err) {
+      console.error("Gate update failed:", err);
+    }
+  };
+
+  const handleTriggersSave = async (
+    triggers: Record<string, { label: string; fired: boolean }>
+  ) => {
+    try {
+      const updated = await apiFetch<Idea>(`/api/ideas/${ideaId}`, {
+        method: "PUT",
+        body: JSON.stringify({ kill_triggers: triggers }),
+      });
+      setIdea(updated);
+      setEditingTriggers(false);
+    } catch (err) {
+      console.error("Trigger save failed:", err);
     }
   };
 
@@ -275,6 +341,58 @@ export default function IdeaDetailPage() {
               <p className="text-sm text-gray-300">{idea.proposed_solution}</p>
             </div>
           )}
+
+          {/* Gates Section */}
+          <div>
+            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">
+              Gates
+            </h3>
+            <div className="space-y-2">
+              {GATES.map((gate) => (
+                <div
+                  key={gate.field}
+                  className="rounded-lg border border-gray-800 bg-gray-900 p-3"
+                >
+                  <p className="text-xs text-gray-400 mb-2">{gate.label}</p>
+                  <div className="flex gap-1.5">
+                    {GATE_STATUSES.map((gs) => (
+                      <button
+                        key={gs.value}
+                        onClick={() => handleGateChange(gate.field, gs.value)}
+                        className={`rounded px-2 py-1 text-[10px] font-medium transition-colors ${
+                          idea[gate.field] === gs.value
+                            ? gs.color
+                            : "bg-gray-800 text-gray-500 hover:bg-gray-700"
+                        }`}
+                      >
+                        {gs.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Kill Triggers Section */}
+          {idea.kill_triggers && (
+            <div>
+              <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">
+                Kill Triggers
+              </h3>
+              <KillTriggerEditor
+                triggers={
+                  idea.kill_triggers as Record<
+                    string,
+                    { label: string; fired: boolean }
+                  >
+                }
+                onSave={handleTriggersSave}
+                editing={editingTriggers}
+                onEditToggle={() => setEditingTriggers(!editingTriggers)}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -314,44 +432,60 @@ export default function IdeaDetailPage() {
 
       {activeTab === "Reviews" && (
         <div className="max-w-2xl space-y-4">
-          {reviews.length === 0 && (
-            <p className="py-8 text-center text-sm text-gray-600">
-              No reviews yet.
-            </p>
-          )}
-          {reviews.map((review) => (
-            <div
-              key={review.id}
-              className="rounded-lg border border-gray-800 bg-gray-900 p-4"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-gray-300">
-                  {review.review_date}
-                </span>
-                <span
-                  className={`rounded px-2 py-0.5 text-xs font-medium ${
-                    review.decision === "continue"
-                      ? "bg-green-900/50 text-green-400"
-                      : review.decision === "kill"
-                      ? "bg-red-900/50 text-red-400"
-                      : review.decision === "park"
-                      ? "bg-yellow-900/50 text-yellow-400"
-                      : "bg-blue-900/50 text-blue-400"
-                  }`}
-                >
-                  {review.decision}
-                </span>
-              </div>
-              {review.reasoning && (
-                <p className="text-sm text-gray-400">{review.reasoning}</p>
-              )}
-              {review.next_hypothesis && (
-                <p className="mt-2 text-xs text-gray-600">
-                  Next: {review.next_hypothesis}
+          {showReviewForm ? (
+            <MonthlyReviewForm
+              ideaId={ideaId}
+              onSubmit={handleReviewSubmit}
+              onCancel={() => setShowReviewForm(false)}
+            />
+          ) : (
+            <>
+              <button
+                onClick={() => setShowReviewForm(true)}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500"
+              >
+                + New Review
+              </button>
+              {reviews.length === 0 && (
+                <p className="py-8 text-center text-sm text-gray-600">
+                  No reviews yet.
                 </p>
               )}
-            </div>
-          ))}
+              {reviews.map((review) => (
+                <div
+                  key={review.id}
+                  className="rounded-lg border border-gray-800 bg-gray-900 p-4"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-300">
+                      {review.review_date}
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-medium ${
+                        review.decision === "continue"
+                          ? "bg-green-900/50 text-green-400"
+                          : review.decision === "kill"
+                          ? "bg-red-900/50 text-red-400"
+                          : review.decision === "park"
+                          ? "bg-yellow-900/50 text-yellow-400"
+                          : "bg-blue-900/50 text-blue-400"
+                      }`}
+                    >
+                      {review.decision}
+                    </span>
+                  </div>
+                  {review.reasoning && (
+                    <p className="text-sm text-gray-400">{review.reasoning}</p>
+                  )}
+                  {review.next_hypothesis && (
+                    <p className="mt-2 text-xs text-gray-600">
+                      Next: {review.next_hypothesis}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
     </div>

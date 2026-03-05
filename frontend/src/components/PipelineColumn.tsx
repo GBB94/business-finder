@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { Idea, IdeaStatus } from "@/lib/types";
 import IdeaCard from "./IdeaCard";
 import QuickAddIdea from "./QuickAddIdea";
@@ -10,6 +11,7 @@ interface PipelineColumnProps {
   ideas: Idea[];
   onIdeaClick: (idea: Idea) => void;
   onQuickAdd?: (name: string, oneLiner: string) => void;
+  onDrop?: (ideaId: string, fromStatus: string, toStatus: string) => void;
 }
 
 export default function PipelineColumn({
@@ -18,9 +20,39 @@ export default function PipelineColumn({
   ideas,
   onIdeaClick,
   onQuickAdd,
+  onDrop,
 }: PipelineColumnProps) {
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const ideaId = e.dataTransfer.getData("application/ideascope-id");
+    const fromStatus = e.dataTransfer.getData("application/ideascope-status");
+    if (ideaId && fromStatus && fromStatus !== status && onDrop) {
+      onDrop(ideaId, fromStatus, status);
+    }
+  };
+
   return (
-    <div className="flex w-64 shrink-0 flex-col rounded-lg border border-gray-800 bg-gray-900/50">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`flex w-64 shrink-0 flex-col rounded-lg border bg-gray-900/50 transition-colors ${
+        dragOver ? "border-indigo-500" : "border-gray-800"
+      }`}
+    >
       <div className="flex items-center justify-between border-b border-gray-800 px-3 py-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
           {label}
