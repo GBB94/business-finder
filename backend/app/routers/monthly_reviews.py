@@ -123,8 +123,22 @@ def generate_summary(idea_id: str, db: Session = Depends(get_db)):
             "dimensions": dims,
         }
 
-    # Load metrics dashboard
-    metrics_summary = build_metrics_dashboard(db, idea)
+    # Load metrics dashboard and serialize ORM objects in history arrays
+    raw_dashboard = build_metrics_dashboard(db, idea)
+    for metric_list in (raw_dashboard.get("retention_metrics", []),
+                        raw_dashboard.get("economics_metrics", [])):
+        for m in metric_list:
+            m["history"] = [
+                {
+                    "value": e.value,
+                    "period_start": e.period_start.isoformat() if e.period_start else None,
+                    "period_end": e.period_end.isoformat() if e.period_end else None,
+                    "sample_size": e.sample_size,
+                    "note": e.note,
+                }
+                for e in m.get("history", [])
+            ]
+    metrics_summary = raw_dashboard
 
     # Evaluate kill triggers
     current_triggers = evaluate_kill_triggers(db, idea)

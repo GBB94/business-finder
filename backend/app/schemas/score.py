@@ -65,6 +65,16 @@ class SynthesisResponse(BaseModel):
     model_version: str
 
 
+class DimensionScoreSnapshot(BaseModel):
+    dimension: str
+    score: int = Field(..., ge=1, le=5)
+    note: Optional[str] = None
+
+
+class ConsistencyCheckRequest(BaseModel):
+    dimensions: list[DimensionScoreSnapshot]
+
+
 class InconsistencyItem(BaseModel):
     dimension: str
     severity: str

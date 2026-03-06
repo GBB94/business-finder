@@ -20,6 +20,7 @@ from app.schemas.score import (
     DimensionScoreResponse,
     SynthesizeRequest,
     SynthesisResponse,
+    ConsistencyCheckRequest,
     InconsistencyItem,
     ConsistencyResponse,
 )
@@ -204,31 +205,24 @@ def synthesize(idea_id: str, body: SynthesizeRequest, db: Session = Depends(get_
 
 
 @router.post("/check-consistency", response_model=ConsistencyResponse)
-def check_consistency(idea_id: str, db: Session = Depends(get_db)):
+def check_consistency(idea_id: str, body: ConsistencyCheckRequest, db: Session = Depends(get_db)):
     idea = _get_idea_or_404(idea_id, db)
-
-    score = (
-        db.query(Score)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
-        .order_by(Score.scored_at.desc())
-        .first()
-    )
-    if not score:
-        raise HTTPException(404, "No score exists for this idea.")
 
     weights = get_weights_map(db)
 
-    # Build scores list from scored dimensions
-    scores_list = []
-    for dim in SCORING_DIMENSIONS:
-        val = getattr(score, f"{dim}_score", None)
-        if val is not None:
-            scores_list.append({
-                "dimension": dim,
-                "score": val,
-                "note": getattr(score, f"{dim}_note", None),
-                "weight": weights.get(dim, 0.0),
-            })
+    # Use the draft scores sent from the UI
+    scores_list = [
+        {
+            "dimension": d.dimension,
+            "score": d.score,
+            "note": d.note,
+            "weight": weights.get(d.dimension, 0.0),
+        }
+        for d in body.dimensions
+    ]
+
+    if not scores_list:
+        raise HTTPException(400, "No scored dimensions provided.")
 
     # Load non-purged evidence
     evidence_rows = (

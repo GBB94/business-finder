@@ -49,14 +49,18 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
   const [expandedNote, setExpandedNote] = useState<string | null>(null);
   const [synthesizing, setSynthesizing] = useState<string | null>(null);
   const [syntheses, setSyntheses] = useState<Record<string, SynthesisResponse>>({});
-  const [synthError, setSynthError] = useState<string | null>(null);
+  const [synthErrors, setSynthErrors] = useState<Record<string, string>>({});
   const [checking, setChecking] = useState(false);
   const [consistency, setConsistency] = useState<ConsistencyResponse | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
 
   const handleSynthesize = async (dimension: string) => {
     setSynthesizing(dimension);
-    setSynthError(null);
+    setSynthErrors((prev) => {
+      const next = { ...prev };
+      delete next[dimension];
+      return next;
+    });
     try {
       const result = await apiFetch<SynthesisResponse>(
         `/api/ideas/${ideaId}/scores/synthesize`,
@@ -67,19 +71,41 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
       );
       setSyntheses((prev) => ({ ...prev, [dimension]: result }));
     } catch (err) {
-      setSynthError(err instanceof Error ? err.message : "Synthesis failed");
+      setSynthErrors((prev) => ({
+        ...prev,
+        [dimension]: err instanceof Error ? err.message : "Synthesis failed",
+      }));
     } finally {
       setSynthesizing(null);
     }
   };
 
   const handleCheckConsistency = async () => {
+    const autoDims = new Set(
+      score?.filter((s) => s.auto_computed).map((s) => s.dimension) ?? []
+    );
+    const draftDimensions = allDims
+      .filter((d) => values[d] !== null && !autoDims.has(d))
+      .map((d) => ({
+        dimension: d,
+        score: values[d] as number,
+        note: notes[d] || undefined,
+      }));
+
+    if (draftDimensions.length === 0) {
+      setCheckError("Score at least one dimension before checking consistency.");
+      return;
+    }
+
     setChecking(true);
     setCheckError(null);
     try {
       const result = await apiFetch<ConsistencyResponse>(
         `/api/ideas/${ideaId}/scores/check-consistency`,
-        { method: "POST" }
+        {
+          method: "POST",
+          body: JSON.stringify({ dimensions: draftDimensions }),
+        }
       );
       setConsistency(result);
     } catch (err) {
@@ -294,8 +320,8 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
                     </div>
                   )}
 
-                  {synthError && synthesizing === null && syntheses[dim] === undefined && (
-                    <div className="mt-2 text-xs text-red-400">{synthError}</div>
+                  {synthErrors[dim] && synthesizing !== dim && (
+                    <div className="mt-2 text-xs text-red-400">{synthErrors[dim]}</div>
                   )}
 
                   {syntheses[dim] && (
