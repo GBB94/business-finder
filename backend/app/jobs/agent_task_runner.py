@@ -34,8 +34,21 @@ LOCK_TTL = 300        # 5 minutes
 LOCK_RENEW_INTERVAL = 60  # renew every 60 seconds
 
 
+class LockLostError(RuntimeError):
+    """Raised when the advisory lock can no longer be renewed."""
+
+
+# --- Step handler registry ---------------------------------------------------
+# Map (task_type, step_name) → callable(db, task, step, input_data) → dict
+# When real handlers are wired, register them here.
+STEP_HANDLERS: dict[tuple[str, str], object] = {}
+
+
 class _LockHeartbeat:
-    """Background thread that periodically renews a Redis advisory lock."""
+    """Background thread that periodically renews a Redis advisory lock.
+
+    Sets the ``lost`` event when renewal fails so the main thread can abort.
+    """
 
     def __init__(
         self,
@@ -50,6 +63,7 @@ class _LockHeartbeat:
         self._token = token
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.lost = threading.Event()
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -69,14 +83,28 @@ class _LockHeartbeat:
                 )
                 if not renewed:
                     logger.warning(
-                        "Lock renewal failed for %s/%s — lock may have been stolen",
+                        "Lock renewal failed for %s/%s — signalling abort",
                         self._idea_id, self._task_type,
                     )
+                    self.lost.set()
                     break
             except Exception:
                 logger.exception(
                     "Error renewing lock for %s/%s", self._idea_id, self._task_type,
                 )
+
+
+def _execute_step(db, task, step):
+    """Dispatch a step to its registered handler, or fail if none exists."""
+    handler_key = (task.task_type, step.step_name)
+    handler = STEP_HANDLERS.get(handler_key)
+    if handler is None:
+        raise NotImplementedError(
+            f"No handler registered for step '{step.step_name}' "
+            f"of task type '{task.task_type}'. "
+            f"Register it in STEP_HANDLERS before running this task type."
+        )
+    return handler(db, task, step, step.input_data)
 
 
 def run_agent_task(task_id: str) -> None:
@@ -122,14 +150,19 @@ def run_agent_task(task_id: str) -> None:
 
         # Execute steps in order
         for step in sorted(task.steps, key=lambda s: s.step_order):
+            # Abort if the lock was lost between steps
+            if heartbeat and heartbeat.lost.is_set():
+                raise LockLostError(
+                    f"Advisory lock lost for {idea_id}/{task_type} — aborting to prevent duplicate execution"
+                )
+
             if step.status == "completed":
                 continue  # Resume from last completed step
 
             step = start_step(db, step)
             try:
-                # Step execution would be dispatched here based on task_type + step_name
-                # For now, mark as completed (actual step handlers to be wired later)
-                step = complete_step(db, step, output_data={"status": "executed"})
+                output = _execute_step(db, task, step)
+                step = complete_step(db, step, output_data=output)
             except Exception as exc:
                 fail_step(db, step, str(exc))
                 raise
@@ -145,8 +178,8 @@ def run_agent_task(task_id: str) -> None:
         if task:
             fail_task(db, task, str(exc))
 
-            # Re-enqueue if retries remain
-            if task.status == "queued":
+            # Re-enqueue if retries remain (but not for lock-loss or missing handlers)
+            if task.status == "queued" and not isinstance(exc, (LockLostError, NotImplementedError)):
                 try:
                     redis_conn = redis.from_url(settings.REDIS_URL)
                     from rq import Queue

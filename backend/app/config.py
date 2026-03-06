@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     DEFAULT_USER_PASSWORD: str = ""
     SESSION_SECRET_KEY: str = "change-me-to-a-random-string"
     SESSION_TTL_HOURS: int = 24
+    COOKIE_SECURE: bool = True
 
     # Secrets encryption
     SECRETS_MASTER_KEY: str = ""

@@ -35,7 +35,7 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
         value=session.id,
         httponly=True,
         samesite="lax",
-        secure=False,  # Set True in production behind HTTPS
+        secure=settings.COOKIE_SECURE,
         max_age=settings.SESSION_TTL_HOURS * 3600,
         path="/",
     )
