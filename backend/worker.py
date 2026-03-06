@@ -8,7 +8,10 @@ from app.config import settings
 
 def main():
     conn = redis.from_url(settings.REDIS_URL)
-    worker = Worker([Queue("default", connection=conn)], connection=conn)
+    worker = Worker(
+        [Queue("agent_tasks", connection=conn), Queue("default", connection=conn)],
+        connection=conn,
+    )
     worker.work()
 
 

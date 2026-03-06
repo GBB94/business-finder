@@ -5,10 +5,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models.idea import Idea
 from app.models.score import Score
+from app.models.user import User
 from app.schemas.idea import (
     IdeaCreate,
     IdeaUpdate,
@@ -55,9 +56,13 @@ def _refresh_triggers(idea: Idea, db: Session) -> None:
 
 
 @router.post("", response_model=IdeaResponse, status_code=201)
-def create_idea(body: IdeaCreate, db: Session = Depends(get_db)):
+def create_idea(
+    body: IdeaCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     idea = Idea(
-        user_id=settings.DEFAULT_USER_ID,
+        user_id=current_user.id,
         **body.model_dump(),
     )
     seed_kill_triggers(idea)
@@ -75,8 +80,9 @@ def list_ideas(
     sort_by: str = Query("created_at"),
     sort_dir: str = Query("desc"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    q = db.query(Idea).filter(Idea.user_id == settings.DEFAULT_USER_ID)
+    q = db.query(Idea).filter(Idea.user_id == current_user.id)
     if status:
         q = q.filter(Idea.status == status)
     if not archived:
@@ -94,21 +100,30 @@ def list_ideas(
     )
 
 
-def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
-    idea = db.query(Idea).filter_by(id=idea_id, user_id=settings.DEFAULT_USER_ID).first()
+def _get_idea_or_404(idea_id: str, user_id: str, db: Session) -> Idea:
+    idea = db.query(Idea).filter_by(id=idea_id, user_id=user_id).first()
     if not idea:
         raise HTTPException(404, "Idea not found")
     return idea
 
 
 @router.get("/{idea_id}", response_model=IdeaResponse)
-def get_idea(idea_id: str, db: Session = Depends(get_db)):
-    return _enrich(_get_idea_or_404(idea_id, db), db)
+def get_idea(
+    idea_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _enrich(_get_idea_or_404(idea_id, current_user.id, db), db)
 
 
 @router.put("/{idea_id}", response_model=IdeaResponse)
-def update_idea(idea_id: str, body: IdeaUpdate, db: Session = Depends(get_db)):
-    idea = _get_idea_or_404(idea_id, db)
+def update_idea(
+    idea_id: str,
+    body: IdeaUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(idea, k, v)
     db.add(idea)
@@ -120,9 +135,12 @@ def update_idea(idea_id: str, body: IdeaUpdate, db: Session = Depends(get_db)):
 
 @router.post("/{idea_id}/transition", response_model=IdeaResponse)
 def transition_idea(
-    idea_id: str, body: IdeaStatusTransition, db: Session = Depends(get_db)
+    idea_id: str,
+    body: IdeaStatusTransition,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    idea = _get_idea_or_404(idea_id, db)
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
     try:
         idea = transition_status(db, idea, body.new_status)
     except ValueError as e:
@@ -132,15 +150,24 @@ def transition_idea(
 
 
 @router.post("/{idea_id}/archive", response_model=IdeaResponse)
-def archive(idea_id: str, body: ArchiveRequest, db: Session = Depends(get_db)):
-    idea = _get_idea_or_404(idea_id, db)
+def archive(
+    idea_id: str,
+    body: ArchiveRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
     idea.archive_note = body.decision_note
     idea = archive_idea(db, idea)
     return _enrich(idea, db)
 
 
 @router.post("/{idea_id}/unarchive", response_model=IdeaResponse)
-def unarchive(idea_id: str, db: Session = Depends(get_db)):
-    idea = _get_idea_or_404(idea_id, db)
+def unarchive(
+    idea_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
     idea = unarchive_idea(db, idea)
     return _enrich(idea, db)

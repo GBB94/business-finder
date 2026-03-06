@@ -94,10 +94,15 @@ async def analyze_community_posts(
     # Build user prompt with fetched content wrapped for injection hardening
     post_entries = []
     for p in posts:
+        # Strip raw Reddit body text when ZDR is not enabled
+        if p.source_type == "reddit" and not settings.ANTHROPIC_ZDR_ENABLED:
+            body_text = "[Reddit content redacted — ZDR not enabled. Only metadata (title, score, comments) is included.]"
+        else:
+            body_text = p.body[:1500]
         post_entries.append(
             f"[{p.source_type}] id={p.source_id} score={p.score} comments={p.comment_count}\n"
             f"Title: {p.title}\n"
-            f"Body: {p.body[:1500]}"
+            f"Body: {body_text}"
         )
 
     user_prompt = (

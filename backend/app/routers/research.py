@@ -6,11 +6,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models.evidence import Evidence, EvidenceType
 from app.models.idea import Idea
 from app.models.research_job import ResearchJob
+from app.models.user import User
 from app.schemas.research import (
     PurgeRequest,
     ResearchJobListResponse,
@@ -25,19 +26,25 @@ router = APIRouter(
 )
 
 
-def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
-    idea = db.query(Idea).filter_by(id=idea_id, user_id=settings.DEFAULT_USER_ID).first()
+def _get_idea_or_404(idea_id: str, user_id: str, db: Session) -> Idea:
+    idea = db.query(Idea).filter_by(id=idea_id, user_id=user_id).first()
     if not idea:
         raise HTTPException(404, "Idea not found")
     return idea
 
 
 @router.post("/scan", response_model=ResearchJobResponse, status_code=202)
-def start_scan(idea_id: str, body: ScanRequest, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def start_scan(
+    idea_id: str,
+    body: ScanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
     job = enqueue_community_scan(
         db=db,
         idea_id=idea_id,
+        user_id=current_user.id,
         queries=body.queries,
         sources=body.sources,
     )
@@ -50,11 +57,12 @@ def list_jobs(
     status: Optional[str] = Query(None),
     job_type: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    _get_idea_or_404(idea_id, db)
+    _get_idea_or_404(idea_id, current_user.id, db)
 
     q = db.query(ResearchJob).filter_by(
-        idea_id=idea_id, user_id=settings.DEFAULT_USER_ID
+        idea_id=idea_id, user_id=current_user.id
     )
     if status:
         q = q.filter(ResearchJob.status == status)
@@ -70,11 +78,16 @@ def list_jobs(
 
 
 @router.get("/jobs/{job_id}", response_model=ResearchJobResponse)
-def get_job(idea_id: str, job_id: str, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def get_job(
+    idea_id: str,
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
 
     job = db.query(ResearchJob).filter_by(
-        id=job_id, idea_id=idea_id, user_id=settings.DEFAULT_USER_ID
+        id=job_id, idea_id=idea_id, user_id=current_user.id
     ).first()
     if not job:
         raise HTTPException(404, "Research job not found")
@@ -82,8 +95,13 @@ def get_job(idea_id: str, job_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/purge")
-def purge_evidence(idea_id: str, body: PurgeRequest, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def purge_evidence(
+    idea_id: str,
+    body: PurgeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=body.older_than_days)
 
@@ -91,7 +109,7 @@ def purge_evidence(idea_id: str, body: PurgeRequest, db: Session = Depends(get_d
         db.query(Evidence)
         .filter(
             Evidence.idea_id == idea_id,
-            Evidence.user_id == settings.DEFAULT_USER_ID,
+            Evidence.user_id == current_user.id,
             Evidence.evidence_type == EvidenceType.community_signal,
             Evidence.created_at < cutoff,
             Evidence.content_purged == False,  # noqa: E712

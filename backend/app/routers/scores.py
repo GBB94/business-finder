@@ -7,13 +7,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models.idea import Idea
 from app.models.score import Score
 from app.models.evidence import Evidence
 from app.models.config import SCORING_DIMENSIONS
 from app.models.score_history import ScoreHistory
+from app.models.user import User
 from app.schemas.score import (
     ScoreCreate,
     ScoreUpdate,
@@ -77,80 +78,99 @@ def _record_score_snapshot(db: Session, score: Score, weights: dict[str, float])
     db.flush()
 
 
-def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
-    idea = db.query(Idea).filter_by(id=idea_id, user_id=settings.DEFAULT_USER_ID).first()
+def _get_idea_or_404(idea_id: str, user_id: str, db: Session) -> Idea:
+    idea = db.query(Idea).filter_by(id=idea_id, user_id=user_id).first()
     if not idea:
         raise HTTPException(404, "Idea not found")
     return idea
 
 
 @router.get("", response_model=Optional[ScoreResponse])
-def get_score(idea_id: str, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def get_score(
+    idea_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
     score = (
         db.query(Score)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .order_by(Score.scored_at.desc())
         .first()
     )
     if not score:
         return None
-    weights = get_weights_map(db)
+    weights = get_weights_map(db, current_user.id)
     return _build_response(score, weights)
 
 
 @router.post("", response_model=ScoreResponse, status_code=201)
-def create_score(idea_id: str, body: ScoreCreate, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
-    # One score per idea per user — replace if exists
+def create_score(
+    idea_id: str,
+    body: ScoreCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
     existing = (
         db.query(Score)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .first()
     )
     if existing:
         db.delete(existing)
         db.flush()
 
-    score = Score(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+    score = Score(idea_id=idea_id, user_id=current_user.id)
     db.add(score)
     db.flush()
 
-    weights = get_weights_map(db)
+    weights = get_weights_map(db, current_user.id)
     score = update_score_dimensions(
         db, score, [d.model_dump() for d in body.dimensions], weights
     )
     score = apply_auto_constraints(db, score)
     _record_score_snapshot(db, score, weights)
+    db.commit()
     return _build_response(score, weights)
 
 
 @router.patch("", response_model=ScoreResponse)
-def patch_score(idea_id: str, body: ScoreUpdate, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def patch_score(
+    idea_id: str,
+    body: ScoreUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
     score = (
         db.query(Score)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .first()
     )
     if not score:
         raise HTTPException(404, "No score exists for this idea. POST first.")
 
-    weights = get_weights_map(db)
+    weights = get_weights_map(db, current_user.id)
     score = update_score_dimensions(
         db, score, [d.model_dump() for d in body.dimensions], weights
     )
     score = apply_auto_constraints(db, score)
     _record_score_snapshot(db, score, weights)
+    db.commit()
     return _build_response(score, weights)
 
 
 @router.get("/history", response_model=ScoreHistoryResponse)
-def get_score_history(idea_id: str, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def get_score_history(
+    idea_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
     rows = (
         db.query(ScoreHistory)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .order_by(ScoreHistory.snapshot_at.desc())
         .limit(50)
         .all()
@@ -174,26 +194,29 @@ DIMENSION_LABELS = {
 
 
 @router.post("/synthesize", response_model=SynthesisResponse)
-def synthesize(idea_id: str, body: SynthesizeRequest, db: Session = Depends(get_db)):
+def synthesize(
+    idea_id: str,
+    body: SynthesizeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     if body.dimension not in SCORING_DIMENSIONS:
         raise HTTPException(400, f"Unknown dimension: {body.dimension}")
 
-    idea = _get_idea_or_404(idea_id, db)
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
 
-    # Load current score + note for this dimension
     score = (
         db.query(Score)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .order_by(Score.scored_at.desc())
         .first()
     )
     current_score = getattr(score, f"{body.dimension}_score", None) if score else None
     current_note = getattr(score, f"{body.dimension}_note", None) if score else None
 
-    # Load non-purged evidence
     evidence_rows = (
         db.query(Evidence)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID, content_purged=False)
+        .filter_by(idea_id=idea_id, user_id=current_user.id, content_purged=False)
         .order_by(Evidence.created_at.desc())
         .all()
     )
@@ -244,12 +267,16 @@ def synthesize(idea_id: str, body: SynthesizeRequest, db: Session = Depends(get_
 
 
 @router.post("/check-consistency", response_model=ConsistencyResponse)
-def check_consistency(idea_id: str, body: ConsistencyCheckRequest, db: Session = Depends(get_db)):
-    idea = _get_idea_or_404(idea_id, db)
+def check_consistency(
+    idea_id: str,
+    body: ConsistencyCheckRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
 
-    weights = get_weights_map(db)
+    weights = get_weights_map(db, current_user.id)
 
-    # Use the draft scores sent from the UI
     scores_list = [
         {
             "dimension": d.dimension,
@@ -263,10 +290,9 @@ def check_consistency(idea_id: str, body: ConsistencyCheckRequest, db: Session =
     if not scores_list:
         raise HTTPException(400, "No scored dimensions provided.")
 
-    # Load non-purged evidence
     evidence_rows = (
         db.query(Evidence)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID, content_purged=False)
+        .filter_by(idea_id=idea_id, user_id=current_user.id, content_purged=False)
         .order_by(Evidence.created_at.desc())
         .all()
     )

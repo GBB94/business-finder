@@ -5,10 +5,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models.idea import Idea
 from app.models.evidence import Evidence
+from app.models.user import User
 from app.schemas.evidence import (
     EvidenceCreate,
     EvidenceResponse,
@@ -18,20 +19,25 @@ from app.schemas.evidence import (
 router = APIRouter(prefix="/api/ideas/{idea_id}/evidence", tags=["evidence"])
 
 
-def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
-    idea = db.query(Idea).filter_by(id=idea_id, user_id=settings.DEFAULT_USER_ID).first()
+def _get_idea_or_404(idea_id: str, user_id: str, db: Session) -> Idea:
+    idea = db.query(Idea).filter_by(id=idea_id, user_id=user_id).first()
     if not idea:
         raise HTTPException(404, "Idea not found")
     return idea
 
 
 @router.post("", response_model=EvidenceResponse, status_code=201)
-def add_evidence(idea_id: str, body: EvidenceCreate, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def add_evidence(
+    idea_id: str,
+    body: EvidenceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
 
     ev = Evidence(
         idea_id=idea_id,
-        user_id=settings.DEFAULT_USER_ID,
+        user_id=current_user.id,
         **body.model_dump(),
     )
     db.add(ev)
@@ -47,10 +53,11 @@ def list_evidence(
     evidence_type: Optional[str] = Query(None),
     sort_dir: str = Query("desc"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    _get_idea_or_404(idea_id, db)
+    _get_idea_or_404(idea_id, current_user.id, db)
 
-    q = db.query(Evidence).filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+    q = db.query(Evidence).filter_by(idea_id=idea_id, user_id=current_user.id)
     if gate:
         q = q.filter(Evidence.gate == gate)
     if evidence_type:
@@ -67,10 +74,15 @@ def list_evidence(
 
 
 @router.get("/{evidence_id}", response_model=EvidenceResponse)
-def get_evidence(idea_id: str, evidence_id: str, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def get_evidence(
+    idea_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
     ev = db.query(Evidence).filter_by(
-        id=evidence_id, idea_id=idea_id, user_id=settings.DEFAULT_USER_ID
+        id=evidence_id, idea_id=idea_id, user_id=current_user.id
     ).first()
     if not ev:
         raise HTTPException(404, "Evidence not found")

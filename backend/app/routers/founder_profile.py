@@ -5,11 +5,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models.founder_profile import FounderProfile
 from app.models.idea import Idea, IdeaStatus
 from app.models.score import Score
+from app.models.user import User
 from app.schemas.founder_profile import (
     FounderProfileUpsert,
     FounderProfileResponse,
@@ -32,14 +33,17 @@ def _respond(profile: FounderProfile) -> FounderProfileResponse:
 
 
 @router.get("", response_model=FounderProfileResponse)
-def get_profile(db: Session = Depends(get_db)):
+def get_profile(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     profile = (
         db.query(FounderProfile)
-        .filter_by(user_id=settings.DEFAULT_USER_ID)
+        .filter_by(user_id=current_user.id)
         .first()
     )
     if not profile:
-        profile = FounderProfile(user_id=settings.DEFAULT_USER_ID)
+        profile = FounderProfile(user_id=current_user.id)
         db.add(profile)
         db.commit()
         db.refresh(profile)
@@ -47,14 +51,18 @@ def get_profile(db: Session = Depends(get_db)):
 
 
 @router.put("", response_model=FounderProfileResponse)
-def upsert_profile(body: FounderProfileUpsert, db: Session = Depends(get_db)):
+def upsert_profile(
+    body: FounderProfileUpsert,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     profile = (
         db.query(FounderProfile)
-        .filter_by(user_id=settings.DEFAULT_USER_ID)
+        .filter_by(user_id=current_user.id)
         .first()
     )
     if not profile:
-        profile = FounderProfile(user_id=settings.DEFAULT_USER_ID)
+        profile = FounderProfile(user_id=current_user.id)
         db.add(profile)
 
     for k, v in body.model_dump(exclude_unset=True).items():
@@ -63,17 +71,16 @@ def upsert_profile(body: FounderProfileUpsert, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(profile)
 
-    # Recompute founder_constraints for all active ideas with scores (atomic)
     active_statuses = [s for s in IdeaStatus if s not in (IdeaStatus.killed, IdeaStatus.parked)]
     ideas = (
         db.query(Idea)
-        .filter(Idea.user_id == settings.DEFAULT_USER_ID, Idea.status.in_(active_statuses))
+        .filter(Idea.user_id == current_user.id, Idea.status.in_(active_statuses))
         .all()
     )
     for idea in ideas:
         score = (
             db.query(Score)
-            .filter_by(idea_id=idea.id, user_id=settings.DEFAULT_USER_ID)
+            .filter_by(idea_id=idea.id, user_id=current_user.id)
             .first()
         )
         if score:

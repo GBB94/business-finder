@@ -7,13 +7,14 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.database import get_db
+from app.dependencies.auth import get_current_user
 from app.models.idea import Idea
 from app.models.evidence import Evidence
 from app.models.monthly_review import MonthlyReview
 from app.models.score import Score
 from app.models.config import SCORING_DIMENSIONS
+from app.models.user import User
 from app.schemas.monthly_review import (
     MonthlyReviewCreate,
     MonthlyReviewResponse,
@@ -30,8 +31,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/ideas/{idea_id}/reviews", tags=["monthly-reviews"])
 
 
-def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
-    idea = db.query(Idea).filter_by(id=idea_id, user_id=settings.DEFAULT_USER_ID).first()
+def _get_idea_or_404(idea_id: str, user_id: str, db: Session) -> Idea:
+    idea = db.query(Idea).filter_by(id=idea_id, user_id=user_id).first()
     if not idea:
         raise HTTPException(404, "Idea not found")
     return idea
@@ -39,16 +40,17 @@ def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
 
 @router.post("", response_model=MonthlyReviewResponse, status_code=201)
 def create_review(
-    idea_id: str, body: MonthlyReviewCreate, db: Session = Depends(get_db)
+    idea_id: str,
+    body: MonthlyReviewCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
-    idea = _get_idea_or_404(idea_id, db)
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
 
-    # Auto-populate metrics snapshot if not provided
     metrics_snapshot = body.metrics_snapshot
     if metrics_snapshot is None:
         metrics_snapshot = build_metrics_snapshot(db, idea)
 
-    # Auto-populate kill triggers fired
     current_triggers = evaluate_kill_triggers(db, idea)
     fired_labels = [
         t["label"] for t in current_triggers.values()
@@ -57,7 +59,7 @@ def create_review(
 
     review = MonthlyReview(
         idea_id=idea_id,
-        user_id=settings.DEFAULT_USER_ID,
+        user_id=current_user.id,
         review_date=body.review_date,
         metrics_snapshot=metrics_snapshot,
         kill_triggers_fired=fired_labels if fired_labels else None,
@@ -72,24 +74,27 @@ def create_review(
     db.commit()
     db.refresh(review)
 
-    # If decision is kill or park, also transition the idea
     if body.decision in ("kill", "park"):
         target = "killed" if body.decision == "kill" else "parked"
         try:
             transition_status(db, idea, target)
         except ValueError:
-            pass  # already in that state
+            pass
 
     return MonthlyReviewResponse.model_validate(review)
 
 
 @router.get("", response_model=MonthlyReviewListResponse)
-def list_reviews(idea_id: str, db: Session = Depends(get_db)):
-    _get_idea_or_404(idea_id, db)
+def list_reviews(
+    idea_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_idea_or_404(idea_id, current_user.id, db)
 
     reviews = (
         db.query(MonthlyReview)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .order_by(MonthlyReview.review_date.desc())
         .all()
     )
@@ -100,19 +105,22 @@ def list_reviews(idea_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/generate-summary", response_model=ReviewSummaryResponse)
-def generate_summary(idea_id: str, db: Session = Depends(get_db)):
-    idea = _get_idea_or_404(idea_id, db)
+def generate_summary(
+    idea_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
 
-    # Load current score
     score = (
         db.query(Score)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .order_by(Score.scored_at.desc())
         .first()
     )
     scores_summary = None
     if score:
-        weights = get_weights_map(db)
+        weights = get_weights_map(db, current_user.id)
         dims = {}
         for dim in SCORING_DIMENSIONS:
             val = getattr(score, f"{dim}_score", None)
@@ -123,7 +131,6 @@ def generate_summary(idea_id: str, db: Session = Depends(get_db)):
             "dimensions": dims,
         }
 
-    # Load metrics dashboard and serialize ORM objects in history arrays
     raw_dashboard = build_metrics_dashboard(db, idea)
     for metric_list in (raw_dashboard.get("retention_metrics", []),
                         raw_dashboard.get("economics_metrics", [])):
@@ -140,7 +147,6 @@ def generate_summary(idea_id: str, db: Session = Depends(get_db)):
             ]
     metrics_summary = raw_dashboard
 
-    # Evaluate kill triggers
     current_triggers = evaluate_kill_triggers(db, idea)
     trigger_states = []
     for key, t in current_triggers.items():
@@ -151,11 +157,10 @@ def generate_summary(idea_id: str, db: Session = Depends(get_db)):
             "fired": t.get("fired", False),
         })
 
-    # Load recent evidence (last 30 days)
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
     evidence_rows = (
         db.query(Evidence)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID, content_purged=False)
+        .filter_by(idea_id=idea_id, user_id=current_user.id, content_purged=False)
         .filter(Evidence.created_at >= cutoff)
         .order_by(Evidence.created_at.desc())
         .all()
@@ -172,10 +177,9 @@ def generate_summary(idea_id: str, db: Session = Depends(get_db)):
         for ev in evidence_rows
     ]
 
-    # Load previous reviews
     prev_reviews = (
         db.query(MonthlyReview)
-        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .filter_by(idea_id=idea_id, user_id=current_user.id)
         .order_by(MonthlyReview.review_date.desc())
         .limit(5)
         .all()

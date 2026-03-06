@@ -294,3 +294,59 @@ export interface ReviewSummaryResponse {
   model_version: string;
   prompt_used?: string;
 }
+
+// Agent Task types
+export type AgentTaskStatus =
+  | "queued"
+  | "claimed"
+  | "running"
+  | "completed"
+  | "failed"
+  | "dead_letter"
+  | "cancelled";
+
+export type AgentTaskStepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export interface AgentTaskStep {
+  id: string;
+  task_id: string;
+  step_order: number;
+  step_name: string;
+  status: AgentTaskStepStatus;
+  input_data: Record<string, unknown> | null;
+  output_data: Record<string, unknown> | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface AgentTask {
+  id: string;
+  idea_id: string | null;
+  user_id: string;
+  task_type: string;
+  status: AgentTaskStatus;
+  priority: number;
+  idempotency_key: string | null;
+  input_params: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
+  error_message: string | null;
+  retry_count: number;
+  max_retries: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  claimed_by: string | null;
+  claimed_at: string | null;
+  steps: AgentTaskStep[];
+}
+
+export interface AgentTaskListResponse {
+  items: AgentTask[];
+  total: number;
+}

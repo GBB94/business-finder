@@ -15,6 +15,7 @@ import httpx
 from app.config import settings
 from app.database import SessionLocal
 from app.models.evidence import Evidence, SourceType
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +58,19 @@ def _purge_evidence(ev: Evidence, reason: str) -> None:
 def run_reddit_purge() -> None:
     """Check all Reddit-sourced evidence and purge if source is deleted.
 
-    Also recomputes Sales Safari reports by marking them for re-synthesis.
+    Iterates over all users to ensure all evidence is checked.
     """
     db = SessionLocal()
     purged_count = 0
     ideas_needing_recompute: set[str] = set()
 
     try:
-        # Get all non-purged Reddit evidence
+        # Get all non-purged Reddit evidence across all users
         reddit_evidence = (
             db.query(Evidence)
             .filter_by(
                 source_type=SourceType.reddit,
                 content_purged=False,
-                user_id=settings.DEFAULT_USER_ID,
             )
             .all()
         )
@@ -81,7 +81,6 @@ def run_reddit_purge() -> None:
 
         logger.info("Reddit purge: checking %d evidence items", len(reddit_evidence))
 
-        # Authenticate with Reddit API if credentials available
         token = None
         if settings.REDDIT_CLIENT_ID and settings.REDDIT_CLIENT_SECRET:
             try:
@@ -150,7 +149,6 @@ def run_reddit_purge() -> None:
                 db.query(Evidence)
                 .filter(
                     Evidence.idea_id == idea_id,
-                    Evidence.user_id == settings.DEFAULT_USER_ID,
                     Evidence.title.like("Sales Safari Report:%"),
                     Evidence.content_purged == False,
                 )

@@ -31,13 +31,12 @@ def enqueue_community_scan(
     idea_id: str,
     queries: list[str],
     sources: list[str] | None = None,
+    user_id: str | None = None,
 ) -> ResearchJob:
     """Create a ResearchJob record and enqueue it to RQ."""
     sources = sources or ["hn", "reddit"]
     idem_key = _idempotency_key(idea_id, queries, sources)
 
-    # Dedup: return existing job if one is still active or already succeeded today.
-    # Check both the base key and any retry-suffixed keys (e.g. :r1, :r2).
     existing = (
         db.query(ResearchJob)
         .filter(ResearchJob.idempotency_key.like(f"{idem_key}%"))
@@ -47,8 +46,6 @@ def enqueue_community_scan(
     if existing:
         return existing
 
-    # Count ALL prior attempts (base key + suffixed keys) to generate a
-    # unique suffix. Uses LIKE prefix match so :r1, :r2 etc. are all counted.
     prior_attempts = (
         db.query(ResearchJob)
         .filter(ResearchJob.idempotency_key.like(f"{idem_key}%"))
@@ -56,10 +53,13 @@ def enqueue_community_scan(
     )
     retry_key = idem_key if prior_attempts == 0 else f"{idem_key}:r{prior_attempts}"
 
+    if not user_id:
+        raise ValueError("user_id is required")
+
     job = ResearchJob(
         id=str(uuid.uuid4()),
         idea_id=idea_id,
-        user_id=settings.DEFAULT_USER_ID,
+        user_id=user_id,
         job_type=JobType.community_scan,
         status=JobStatus.queued,
         input_params={"queries": queries, "sources": sources},
@@ -69,7 +69,6 @@ def enqueue_community_scan(
     db.commit()
     db.refresh(job)
 
-    # Enqueue to RQ
     try:
         conn = redis.from_url(settings.REDIS_URL)
         q = Queue("default", connection=conn)
@@ -97,7 +96,6 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
     queries = params.get("queries", [])
     sources = params.get("sources", ["hn", "reddit"])
 
-    # Fetch posts from adapters in parallel
     tasks = []
     if "hn" in sources:
         tasks.append(HNAdapter().search(queries, limit=25))
@@ -113,7 +111,6 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
             continue
         all_posts.extend(result)
 
-    # Deduplicate by source_id
     seen = set()
     unique_posts = []
     for p in all_posts:
@@ -129,7 +126,6 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
         db.commit()
         return
 
-    # Run Claude analysis
     analysis = await analyze_community_posts(
         idea_name=idea.name,
         idea_audience=idea.audience,
@@ -138,7 +134,6 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
         posts=unique_posts,
     )
 
-    # Create Evidence records for relevant posts
     evidence_count = 0
     for sp in analysis.scored_posts:
         if sp.relevance_score < 5:
@@ -147,12 +142,11 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
         source_type_val = SourceType.hn if sp.source_type == "hn" else SourceType.reddit
         sentiment_val = _map_sentiment(sp.sentiment)
 
-        # Use Claude's summary as title, not verbatim post title (Reddit compliance)
         evidence_title = sp.summary[:500] if sp.summary else "Community Signal"
 
         ev = Evidence(
             idea_id=idea.id,
-            user_id=settings.DEFAULT_USER_ID,
+            user_id=job.user_id,
             gate=GateLabel.discovery,
             evidence_type=EvidenceType.community_signal,
             title=evidence_title,
@@ -172,11 +166,10 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
         db.add(ev)
         evidence_count += 1
 
-    # Store Sales Safari Report as a separate evidence record
     if analysis.sales_safari_summary:
         report_ev = Evidence(
             idea_id=idea.id,
-            user_id=settings.DEFAULT_USER_ID,
+            user_id=job.user_id,
             gate=GateLabel.discovery,
             evidence_type=EvidenceType.community_signal,
             title=f"Sales Safari Report: {idea.name}"[:500],

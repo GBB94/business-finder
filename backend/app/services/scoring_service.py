@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 from app.models.config import ScoringWeight, SCORING_DIMENSIONS
 from app.models.founder_profile import FounderProfile
 from app.models.score import Score
-from app.config import settings
 
 DISQUALIFIER_DIMENSIONS = [
     "problem_severity",
@@ -17,8 +16,9 @@ DISQUALIFIER_DIMENSIONS = [
 
 
 def get_weights_map(db: Session, user_id: Optional[str] = None) -> dict[str, float]:
-    uid = user_id or settings.DEFAULT_USER_ID
-    rows = db.query(ScoringWeight).filter_by(user_id=uid).all()
+    if not user_id:
+        raise ValueError("user_id is required for get_weights_map")
+    rows = db.query(ScoringWeight).filter_by(user_id=user_id).all()
     return {r.dimension: r.weight for r in rows}
 
 
@@ -84,7 +84,7 @@ def compute_founder_constraints(profile: FounderProfile) -> tuple[int, str]:
     if profile.monthly_burn_rate and profile.monthly_burn_rate > 0:
         runway = round(profile.current_savings / profile.monthly_burn_rate, 1)
     else:
-        runway = 99.0  # no burn = infinite runway
+        runway = 99.0
 
     total_hours = (
         profile.available_hours_per_week_building
@@ -100,13 +100,7 @@ def compute_founder_constraints(profile: FounderProfile) -> tuple[int, str]:
 
 
 def apply_auto_constraints(db: Session, score: Score, *, commit: bool = True) -> Score:
-    """Compute and set founder_constraints from the founder profile.
-
-    If no profile exists, the dimension is nulled with an explanatory note
-    so that manual values can never masquerade as auto-computed.
-
-    When *commit* is False the caller is responsible for committing.
-    """
+    """Compute and set founder_constraints from the founder profile."""
     from app.models.idea import Idea
 
     idea = db.query(Idea).filter_by(id=score.idea_id).first()

@@ -6,6 +6,7 @@ export async function apiFetch<T>(
   options?: RequestInit
 ): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...options?.headers,
@@ -14,7 +15,16 @@ export async function apiFetch<T>(
   });
 
   if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      if (body.detail) {
+        detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+      }
+    } catch {
+      // response wasn't JSON, fall back to statusText
+    }
+    throw new Error(`API error: ${res.status} — ${detail}`);
   }
 
   return res.json();

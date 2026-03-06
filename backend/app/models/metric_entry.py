@@ -8,7 +8,6 @@ from typing import Optional
 from sqlalchemy import String, Text, Float, Integer, Date, DateTime, Enum, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.config import default_user_id
 from app.database import Base
 
 
@@ -29,7 +28,7 @@ class MetricEntry(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     idea_id: Mapped[str] = mapped_column(String(36), ForeignKey("ideas.id"), nullable=False, index=True)
-    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True, default=default_user_id)
+    user_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
 
     category: Mapped[str] = mapped_column(Enum(MetricCategory), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(50), nullable=False)
