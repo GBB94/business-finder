@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import redis
 
@@ -146,7 +146,14 @@ def run_agent_task(task_id: str) -> None:
             redis_conn = redis.from_url(settings.REDIS_URL)
             lock_token = acquire_project_lock(redis_conn, idea_id, task_type, ttl=LOCK_TTL)
             if not lock_token:
-                logger.info("Lock held for %s/%s — skipping task %s", idea_id, task_type, task_id)
+                logger.info("Lock held for %s/%s — re-enqueueing task %s", idea_id, task_type, task_id)
+                from rq import Queue
+                q = Queue("agent_tasks", connection=redis_conn)
+                q.enqueue_in(
+                    timedelta(seconds=30),
+                    "app.jobs.agent_task_runner.run_agent_task",
+                    task_id,
+                )
                 return
 
             # Start heartbeat to keep the lock alive for long-running tasks
