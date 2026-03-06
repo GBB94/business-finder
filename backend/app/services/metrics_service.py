@@ -327,6 +327,7 @@ def evaluate_metric_triggers(db: Session, idea: Idea) -> list[dict]:
                 "state": state,
                 "fired": state == "red",
                 "metric_key": None,
+                "first_breach_at": first_breach,
             })
             continue
 
@@ -363,6 +364,7 @@ def evaluate_metric_triggers(db: Session, idea: Idea) -> list[dict]:
             "state": state,
             "fired": state == "red",
             "metric_key": metric_key,
+            "first_breach_at": first_breach,
         })
 
     return results
@@ -378,6 +380,7 @@ def update_trigger_states_on_idea(db: Session, idea: Idea) -> dict:
         if key in triggers:
             triggers[key]["state"] = ts["state"]
             triggers[key]["fired"] = ts["fired"]
+            triggers[key]["first_breach_at"] = ts.get("first_breach_at")
 
     return triggers
 

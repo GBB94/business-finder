@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 interface KillTrigger {
   label: string;
@@ -57,6 +57,11 @@ export default function KillTriggerEditor({
   const [draft, setDraft] = useState<Record<string, KillTrigger>>(() => ({
     ...triggers,
   }));
+
+  // Resync draft when props change (e.g. after server-side trigger evaluation)
+  useEffect(() => {
+    setDraft({ ...triggers });
+  }, [triggers]);
 
   const entries = Object.entries(editing ? draft : triggers);
 
@@ -220,7 +225,10 @@ export default function KillTriggerEditor({
             Save
           </button>
           <button
-            onClick={onEditToggle}
+            onClick={() => {
+              setDraft({ ...triggers });
+              onEditToggle();
+            }}
             className="text-xs text-gray-500 hover:text-gray-300"
           >
             Cancel

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -44,7 +45,15 @@ def create_metric(idea_id: str, body: MetricEntryCreate, db: Session = Depends(g
         **body.model_dump(),
     )
     db.add(entry)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409,
+            f"A metric entry for '{body.metric_key}' with period_start "
+            f"'{body.period_start}' already exists for this idea.",
+        )
     db.refresh(entry)
     return MetricEntryResponse.model_validate(entry)
 

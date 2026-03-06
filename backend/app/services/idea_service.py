@@ -207,5 +207,6 @@ def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
                 continue
             triggers[key]["state"] = ms["state"]
             triggers[key]["fired"] = ms["fired"]
+            triggers[key]["first_breach_at"] = ms.get("first_breach_at")
 
     return triggers

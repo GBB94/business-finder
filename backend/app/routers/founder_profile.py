@@ -8,10 +8,13 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models.founder_profile import FounderProfile
+from app.models.idea import Idea, IdeaStatus
+from app.models.score import Score
 from app.schemas.founder_profile import (
     FounderProfileUpsert,
     FounderProfileResponse,
 )
+from app.services.scoring_service import apply_auto_constraints
 
 router = APIRouter(prefix="/api/profile", tags=["founder-profile"])
 
@@ -59,4 +62,22 @@ def upsert_profile(body: FounderProfileUpsert, db: Session = Depends(get_db)):
 
     db.commit()
     db.refresh(profile)
+
+    # Recompute founder_constraints for all active ideas with scores (atomic)
+    active_statuses = [s for s in IdeaStatus if s not in (IdeaStatus.killed, IdeaStatus.parked)]
+    ideas = (
+        db.query(Idea)
+        .filter(Idea.user_id == settings.DEFAULT_USER_ID, Idea.status.in_(active_statuses))
+        .all()
+    )
+    for idea in ideas:
+        score = (
+            db.query(Score)
+            .filter_by(idea_id=idea.id, user_id=settings.DEFAULT_USER_ID)
+            .first()
+        )
+        if score:
+            apply_auto_constraints(db, score, commit=False)
+
+    db.commit()
     return _respond(profile)

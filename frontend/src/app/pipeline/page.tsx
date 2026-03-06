@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
-import type { Idea, IdeaListResponse, IdeaStatus } from "@/lib/types";
+import type { Idea, IdeaListResponse, IdeaStatus, FounderProfile } from "@/lib/types";
 import PipelineColumn from "@/components/PipelineColumn";
 
 const COLUMNS: { status: IdeaStatus; label: string }[] = [
@@ -43,6 +43,7 @@ export default function PipelinePage() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [dropError, setDropError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<FounderProfile | null>(null);
 
   const fetchIdeas = async () => {
     try {
@@ -57,6 +58,9 @@ export default function PipelinePage() {
 
   useEffect(() => {
     fetchIdeas();
+    apiFetch<FounderProfile>("/api/profile")
+      .then(setProfile)
+      .catch((err) => console.error("Failed to load profile:", err));
   }, []);
 
   // Auto-clear error after 4 seconds
@@ -116,6 +120,21 @@ export default function PipelinePage() {
   return (
     <div className="p-6">
       <h1 className="mb-6 text-2xl font-bold">Pipeline</h1>
+      {profile?.runway_months_remaining != null &&
+        profile.runway_months_remaining <= profile.runway_floor_months && (
+          <div className="mb-4 rounded-lg border border-red-800 bg-red-950/30 px-4 py-2 text-sm text-red-400">
+            <span className="font-semibold">Runway critical ({profile.runway_months_remaining} months).</span>{" "}
+            Stop all discretionary spending and reassess.
+          </div>
+        )}
+      {profile?.runway_months_remaining != null &&
+        profile.runway_months_remaining > profile.runway_floor_months &&
+        profile.runway_months_remaining <= 6 && (
+          <div className="mb-4 rounded-lg border border-yellow-800 bg-yellow-950/30 px-4 py-2 text-sm text-yellow-400">
+            <span className="font-semibold">Runway low ({profile.runway_months_remaining} months).</span>{" "}
+            Framework recommends biasing toward offer-ladder or marketplace-distributed products.
+          </div>
+        )}
       {dropError && (
         <div className="mb-4 rounded-lg border border-red-800 bg-red-950/50 px-4 py-2 text-sm text-red-400">
           {dropError}

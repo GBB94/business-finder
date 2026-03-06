@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     REDDIT_CLIENT_ID: str = ""
     REDDIT_CLIENT_SECRET: str = ""
+    CLAUDE_MODEL: str = "claude-sonnet-4-5-20250929"
+    REDDIT_USER_AGENT: str = "IdeaScope/0.1 by u/ideascope"
     DEFAULT_USER_ID: str = "00000000-0000-0000-0000-000000000001"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}

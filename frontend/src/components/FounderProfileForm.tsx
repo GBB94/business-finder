@@ -110,6 +110,21 @@ export default function FounderProfileForm({
         </p>
       </div>
 
+      {/* Runway warnings */}
+      {runway && parseFloat(runway) <= form.runway_floor_months && (
+        <div className="rounded-lg border border-red-800 bg-red-950/30 p-3 text-sm text-red-400">
+          <p className="font-semibold">Stop all discretionary spending and reassess.</p>
+          {form.stop_spend_trigger && (
+            <p className="mt-1 text-xs text-red-500">{form.stop_spend_trigger}</p>
+          )}
+        </div>
+      )}
+      {runway && parseFloat(runway) > form.runway_floor_months && parseFloat(runway) <= 6 && (
+        <div className="rounded-lg border border-yellow-800 bg-yellow-950/30 p-3 text-sm text-yellow-400">
+          Framework recommends biasing toward offer-ladder or marketplace-distributed products.
+        </div>
+      )}
+
       {/* Financial */}
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-gray-300">Finances</h3>

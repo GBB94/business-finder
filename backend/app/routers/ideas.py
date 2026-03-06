@@ -35,19 +35,22 @@ def _enrich(idea: Idea, db: Session) -> IdeaResponse:
     wt = latest_score.weighted_total if latest_score else None
     days = compute_days_in_stage(idea)
 
-    # Evaluate kill triggers on read
-    if idea.kill_triggers:
-        updated_triggers = evaluate_kill_triggers(db, idea)
-        if updated_triggers != idea.kill_triggers:
-            idea.kill_triggers = updated_triggers
-            db.add(idea)
-            db.commit()
-            db.refresh(idea)
-
     resp = IdeaResponse.model_validate(idea)
     resp.weighted_total = wt
     resp.days_in_stage = days
     return resp
+
+
+def _refresh_triggers(idea: Idea, db: Session) -> None:
+    """Evaluate and persist kill trigger updates. Call only on mutations."""
+    if not idea.kill_triggers:
+        return
+    updated_triggers = evaluate_kill_triggers(db, idea)
+    if updated_triggers != idea.kill_triggers:
+        idea.kill_triggers = updated_triggers
+        db.add(idea)
+        db.commit()
+        db.refresh(idea)
 
 
 @router.post("", response_model=IdeaResponse, status_code=201)
@@ -60,6 +63,7 @@ def create_idea(body: IdeaCreate, db: Session = Depends(get_db)):
     db.add(idea)
     db.commit()
     db.refresh(idea)
+    _refresh_triggers(idea, db)
     return _enrich(idea, db)
 
 
@@ -98,7 +102,7 @@ def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
 
 @router.get("/{idea_id}", response_model=IdeaResponse)
 def get_idea(idea_id: str, db: Session = Depends(get_db)):
-    return _enrich(_get_idea_or_404(idea_id, db))
+    return _enrich(_get_idea_or_404(idea_id, db), db)
 
 
 @router.put("/{idea_id}", response_model=IdeaResponse)
@@ -109,6 +113,7 @@ def update_idea(idea_id: str, body: IdeaUpdate, db: Session = Depends(get_db)):
     db.add(idea)
     db.commit()
     db.refresh(idea)
+    _refresh_triggers(idea, db)
     return _enrich(idea, db)
 
 
@@ -121,6 +126,7 @@ def transition_idea(
         idea = transition_status(db, idea, body.new_status)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _refresh_triggers(idea, db)
     return _enrich(idea, db)
 
 
