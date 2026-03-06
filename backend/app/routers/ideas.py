@@ -15,6 +15,7 @@ from app.schemas.idea import (
     IdeaStatusTransition,
     IdeaResponse,
     IdeaListResponse,
+    ArchiveRequest,
 )
 from app.services.idea_service import (
     transition_status,
@@ -131,8 +132,9 @@ def transition_idea(
 
 
 @router.post("/{idea_id}/archive", response_model=IdeaResponse)
-def archive(idea_id: str, db: Session = Depends(get_db)):
+def archive(idea_id: str, body: ArchiveRequest, db: Session = Depends(get_db)):
     idea = _get_idea_or_404(idea_id, db)
+    idea.archive_note = body.decision_note
     idea = archive_idea(db, idea)
     return _enrich(idea, db)
 

@@ -135,6 +135,7 @@ def archive_idea(db: Session, idea: Idea) -> Idea:
 
 def unarchive_idea(db: Session, idea: Idea) -> Idea:
     idea.archived_at = None
+    idea.archive_note = None
     db.add(idea)
     db.commit()
     db.refresh(idea)

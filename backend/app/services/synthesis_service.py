@@ -37,6 +37,7 @@ class SynthesisResult:
     evidence_cited: list[str] = field(default_factory=list)
     gaps: str = ""
     model_version: str = ""
+    prompt_used: str = ""
 
 
 @dataclass
@@ -44,6 +45,7 @@ class ConsistencyResult:
     inconsistencies: list[dict] = field(default_factory=list)
     overall_assessment: str = ""
     model_version: str = ""
+    prompt_used: str = ""
 
 
 @dataclass
@@ -54,6 +56,30 @@ class ReviewSummaryResult:
     key_developments: list[str] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     model_version: str = ""
+    prompt_used: str = ""
+
+
+_REDDIT_SOURCES = {"reddit"}
+
+
+def _sanitize_evidence_for_zdr(evidence_items: list[dict]) -> list[dict]:
+    """When ZDR is not enabled, strip raw Reddit text before sending to Claude.
+
+    Replaces raw content with structured summary fields only.
+    """
+    sanitized = []
+    for ev in evidence_items:
+        source = ev.get("source_type", "other")
+        if source in _REDDIT_SOURCES:
+            sanitized_ev = {
+                **ev,
+                "content": "[Reddit content redacted — ZDR not enabled. "
+                           "Only structured metadata (title, type, sentiment, tags) is included.]",
+            }
+            sanitized.append(sanitized_ev)
+        else:
+            sanitized.append(ev)
+    return sanitized
 
 
 SYSTEM_PROMPT = """\
@@ -108,6 +134,10 @@ async def synthesize_evidence_for_dimension(
     model = settings.CLAUDE_MODEL
     dim_description = DIMENSION_DESCRIPTIONS.get(dimension, dimension_label)
 
+    # Strip raw Reddit content when ZDR is not enabled
+    if not settings.ANTHROPIC_ZDR_ENABLED:
+        evidence_items = _sanitize_evidence_for_zdr(evidence_items)
+
     # Build evidence data block
     evidence_entries = []
     for ev in evidence_items:
@@ -158,6 +188,7 @@ async def synthesize_evidence_for_dimension(
             evidence_cited=[],
             gaps="All evidence types are missing. Consider running community research, adding competitor data, or logging customer conversations.",
             model_version=model,
+            prompt_used=user_prompt,
         )
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -186,6 +217,7 @@ async def synthesize_evidence_for_dimension(
         evidence_cited=data.get("evidence_cited", []),
         gaps=data.get("gaps", ""),
         model_version=model,
+        prompt_used=user_prompt,
     )
 
 
@@ -246,7 +278,12 @@ async def check_score_consistency(
             inconsistencies=[],
             overall_assessment="No dimensions have been scored yet.",
             model_version=model,
+            prompt_used="",
         )
+
+    # Strip raw Reddit content when ZDR is not enabled
+    if not settings.ANTHROPIC_ZDR_ENABLED:
+        evidence_items = _sanitize_evidence_for_zdr(evidence_items)
 
     # Build scores block
     scores_block = "\n".join(
@@ -312,6 +349,7 @@ async def check_score_consistency(
         inconsistencies=data.get("inconsistencies", []),
         overall_assessment=data.get("overall_assessment", ""),
         model_version=model,
+        prompt_used=user_prompt,
     )
 
 
@@ -363,6 +401,10 @@ async def generate_review_summary(
         )
 
     model = settings.CLAUDE_MODEL
+
+    # Strip raw Reddit content when ZDR is not enabled
+    if not settings.ANTHROPIC_ZDR_ENABLED:
+        recent_evidence = _sanitize_evidence_for_zdr(recent_evidence)
 
     # Build data block
     sections = [
@@ -436,4 +478,5 @@ async def generate_review_summary(
         key_developments=data.get("key_developments", []),
         open_questions=data.get("open_questions", []),
         model_version=model,
+        prompt_used=user_prompt,
     )

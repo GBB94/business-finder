@@ -219,4 +219,5 @@ def generate_summary(idea_id: str, db: Session = Depends(get_db)):
         key_developments=result.key_developments,
         open_questions=result.open_questions,
         model_version=result.model_version,
+        prompt_used=result.prompt_used,
     )

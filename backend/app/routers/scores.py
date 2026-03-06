@@ -13,6 +13,7 @@ from app.models.idea import Idea
 from app.models.score import Score
 from app.models.evidence import Evidence
 from app.models.config import SCORING_DIMENSIONS
+from app.models.score_history import ScoreHistory
 from app.schemas.score import (
     ScoreCreate,
     ScoreUpdate,
@@ -23,6 +24,7 @@ from app.schemas.score import (
     ConsistencyCheckRequest,
     InconsistencyItem,
     ConsistencyResponse,
+    ScoreHistoryResponse,
 )
 from app.services.scoring_service import get_weights_map, update_score_dimensions, apply_auto_constraints
 from app.services.synthesis_service import (
@@ -52,6 +54,27 @@ def _build_response(score: Score, weights: dict[str, float]) -> ScoreResponse:
     resp = ScoreResponse.model_validate(score)
     resp.dimensions = dims
     return resp
+
+
+def _record_score_snapshot(db: Session, score: Score, weights: dict[str, float]) -> None:
+    """Append a score history snapshot."""
+    dims = {}
+    for dim in SCORING_DIMENSIONS:
+        val = getattr(score, f"{dim}_score", None)
+        if val is not None:
+            dims[dim] = {
+                "score": val,
+                "note": getattr(score, f"{dim}_note", None),
+                "weight": weights.get(dim, 0.0),
+            }
+    snapshot = ScoreHistory(
+        idea_id=score.idea_id,
+        user_id=score.user_id,
+        dimensions_snapshot=dims,
+        weighted_total=score.weighted_total,
+    )
+    db.add(snapshot)
+    db.flush()
 
 
 def _get_idea_or_404(idea_id: str, db: Session) -> Idea:
@@ -98,6 +121,7 @@ def create_score(idea_id: str, body: ScoreCreate, db: Session = Depends(get_db))
         db, score, [d.model_dump() for d in body.dimensions], weights
     )
     score = apply_auto_constraints(db, score)
+    _record_score_snapshot(db, score, weights)
     return _build_response(score, weights)
 
 
@@ -117,7 +141,21 @@ def patch_score(idea_id: str, body: ScoreUpdate, db: Session = Depends(get_db)):
         db, score, [d.model_dump() for d in body.dimensions], weights
     )
     score = apply_auto_constraints(db, score)
+    _record_score_snapshot(db, score, weights)
     return _build_response(score, weights)
+
+
+@router.get("/history", response_model=ScoreHistoryResponse)
+def get_score_history(idea_id: str, db: Session = Depends(get_db)):
+    _get_idea_or_404(idea_id, db)
+    rows = (
+        db.query(ScoreHistory)
+        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .order_by(ScoreHistory.snapshot_at.desc())
+        .limit(50)
+        .all()
+    )
+    return ScoreHistoryResponse(items=rows, total=len(rows))
 
 
 DIMENSION_LABELS = {
@@ -201,6 +239,7 @@ def synthesize(idea_id: str, body: SynthesizeRequest, db: Session = Depends(get_
         evidence_cited=result.evidence_cited,
         gaps=result.gaps,
         model_version=result.model_version,
+        prompt_used=result.prompt_used,
     )
 
 
@@ -268,4 +307,5 @@ def check_consistency(idea_id: str, body: ConsistencyCheckRequest, db: Session =
         ],
         overall_assessment=result.overall_assessment,
         model_version=result.model_version,
+        prompt_used=result.prompt_used,
     )

@@ -63,6 +63,7 @@ class SynthesisResponse(BaseModel):
     evidence_cited: list[str]
     gaps: str
     model_version: str
+    prompt_used: Optional[str] = None
 
 
 class DimensionScoreSnapshot(BaseModel):
@@ -86,3 +87,18 @@ class ConsistencyResponse(BaseModel):
     inconsistencies: list[InconsistencyItem]
     overall_assessment: str
     model_version: str
+    prompt_used: Optional[str] = None
+
+
+class ScoreHistoryEntry(BaseModel):
+    model_config = {"from_attributes": True}
+
+    id: str
+    weighted_total: Optional[float]
+    dimensions_snapshot: Optional[dict]
+    snapshot_at: datetime
+
+
+class ScoreHistoryResponse(BaseModel):
+    items: list[ScoreHistoryEntry]
+    total: int

@@ -38,6 +38,7 @@ export default function MonthlyReviewForm({
   const [summary, setSummary] = useState<ReviewSummaryResponse | null>(null);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(true);
+  const [showPrompt, setShowPrompt] = useState(false);
 
   const handleGenerateSummary = async () => {
     setGenerating(true);
@@ -183,6 +184,21 @@ export default function MonthlyReviewForm({
                     ))}
                   </ul>
                 </div>
+              )}
+              {summary.prompt_used && (
+                <>
+                  <button
+                    onClick={() => setShowPrompt(!showPrompt)}
+                    className="text-[10px] text-gray-600 hover:text-gray-400"
+                  >
+                    {showPrompt ? "hide reasoning data" : "show reasoning data"}
+                  </button>
+                  {showPrompt && (
+                    <pre className="mt-1 max-h-48 overflow-auto rounded bg-gray-950 p-2 text-[10px] text-gray-600 whitespace-pre-wrap">
+                      {summary.prompt_used}
+                    </pre>
+                  )}
+                </>
               )}
             </div>
           )}

@@ -76,8 +76,13 @@ class IdeaResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     archived_at: Optional[datetime]
+    archive_note: Optional[str] = None
     weighted_total: Optional[float] = None
     days_in_stage: Optional[int] = None
+
+
+class ArchiveRequest(BaseModel):
+    decision_note: str = Field(..., min_length=1)
 
 
 class IdeaListResponse(BaseModel):

@@ -20,8 +20,10 @@ import MonthlyReviewForm from "@/components/MonthlyReviewForm";
 import KillTriggerEditor from "@/components/KillTriggerEditor";
 import MetricsPanel from "@/components/MetricsPanel";
 import ResearchPanel from "@/components/ResearchPanel";
+import GateSummary from "@/components/GateSummary";
+import ComplianceCheck from "@/components/ComplianceCheck";
 
-const TABS = ["Overview", "Score", "Evidence", "Research", "Metrics", "Reviews"] as const;
+const TABS = ["Overview", "Score", "Evidence", "Research", "Metrics", "Reviews", "Decision Log"] as const;
 type Tab = (typeof TABS)[number];
 
 const STATUS_TRANSITIONS: Record<string, { label: string; target: string }[]> = {
@@ -87,6 +89,8 @@ export default function IdeaDetailPage() {
   const [editingTriggers, setEditingTriggers] = useState(false);
   const [filterGate, setFilterGate] = useState("");
   const [filterType, setFilterType] = useState("");
+  const [archivePrompt, setArchivePrompt] = useState(false);
+  const [archiveNote, setArchiveNote] = useState("");
 
   const fetchAll = useCallback(async () => {
     try {
@@ -124,14 +128,32 @@ export default function IdeaDetailPage() {
     }
   };
 
-  const handleArchive = async () => {
+  const handleArchiveClick = () => {
     if (!idea) return;
-    const endpoint = idea.archived_at
-      ? `/api/ideas/${ideaId}/unarchive`
-      : `/api/ideas/${ideaId}/archive`;
+    if (idea.archived_at) {
+      // Unarchive doesn't need a note
+      handleArchive();
+    } else {
+      setArchivePrompt(true);
+      setArchiveNote("");
+    }
+  };
+
+  const handleArchive = async (note?: string) => {
+    if (!idea) return;
+    const isArchiving = !idea.archived_at;
+    const endpoint = isArchiving
+      ? `/api/ideas/${ideaId}/archive`
+      : `/api/ideas/${ideaId}/unarchive`;
     try {
-      const updated = await apiFetch<Idea>(endpoint, { method: "POST" });
+      const opts: RequestInit = { method: "POST" };
+      if (isArchiving && note) {
+        opts.body = JSON.stringify({ decision_note: note });
+      }
+      const updated = await apiFetch<Idea>(endpoint, opts);
       setIdea(updated);
+      setArchivePrompt(false);
+      setArchiveNote("");
     } catch (err) {
       console.error("Archive toggle failed:", err);
     }
@@ -270,13 +292,45 @@ export default function IdeaDetailPage() {
             </select>
           )}
           <button
-            onClick={handleArchive}
+            onClick={handleArchiveClick}
             className="rounded bg-gray-800 px-2 py-1 text-xs text-gray-400 hover:text-gray-200"
           >
             {idea.archived_at ? "Unarchive" : "Archive"}
           </button>
         </div>
       </div>
+
+      {/* Archive decision note prompt */}
+      {archivePrompt && (
+        <div className="mb-6 rounded-lg border border-amber-800 bg-amber-950/20 p-4 space-y-3">
+          <p className="text-sm text-gray-300">
+            Why are you archiving this idea? This note will be saved for future reference.
+          </p>
+          <textarea
+            value={archiveNote}
+            onChange={(e) => setArchiveNote(e.target.value)}
+            placeholder="Decision note (required)..."
+            className="w-full rounded bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 outline-none focus:ring-1 focus:ring-amber-500"
+            rows={3}
+            autoFocus
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleArchive(archiveNote)}
+              disabled={archiveNote.trim().length === 0}
+              className="rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 disabled:opacity-40 transition-colors"
+            >
+              Archive with Note
+            </button>
+            <button
+              onClick={() => setArchivePrompt(false)}
+              className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mb-6 flex border-b border-gray-800">
@@ -376,6 +430,29 @@ export default function IdeaDetailPage() {
             </div>
           </div>
 
+          {/* Gate Evidence Summary */}
+          <div>
+            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">
+              Gate Evidence
+            </h3>
+            <GateSummary
+              evidence={evidence}
+              gateStatuses={{
+                gate_1_status: idea.gate_1_status as GateStatus,
+                gate_2_status: idea.gate_2_status as GateStatus,
+                gate_3_status: idea.gate_3_status as GateStatus,
+              }}
+            />
+          </div>
+
+          {/* Compliance Quick-Check */}
+          <div>
+            <h3 className="text-xs font-semibold uppercase text-gray-500 mb-2">
+              Compliance Check
+            </h3>
+            <ComplianceCheck idea={idea} />
+          </div>
+
           {/* Kill Triggers Section */}
           {idea.kill_triggers && (
             <div>
@@ -404,6 +481,7 @@ export default function IdeaDetailPage() {
             ideaId={ideaId}
             score={score?.dimensions ?? null}
             weights={weights}
+            targetPricePoint={idea.target_price_point}
             onSave={handleScoreSave}
           />
         </div>
@@ -499,6 +577,77 @@ export default function IdeaDetailPage() {
                 </div>
               ))}
             </>
+          )}
+        </div>
+      )}
+
+      {activeTab === "Decision Log" && (
+        <div className="max-w-2xl space-y-4">
+          <h3 className="text-xs font-semibold uppercase text-gray-500">
+            Decision Timeline
+          </h3>
+          {reviews.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-600">
+              No decisions recorded yet.
+            </p>
+          ) : (
+            <div className="relative border-l border-gray-800 pl-6 space-y-6">
+              {reviews.map((review) => (
+                <div key={review.id} className="relative">
+                  <span
+                    className={`absolute -left-[25px] h-3 w-3 rounded-full ${
+                      review.decision === "continue"
+                        ? "bg-green-500"
+                        : review.decision === "kill"
+                        ? "bg-red-500"
+                        : review.decision === "park"
+                        ? "bg-yellow-500"
+                        : "bg-blue-500"
+                    }`}
+                  />
+                  <div className="rounded-lg border border-gray-800 bg-gray-900 p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-gray-300">
+                        {review.review_date}
+                      </span>
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-semibold uppercase ${
+                          review.decision === "continue"
+                            ? "bg-green-900/50 text-green-400"
+                            : review.decision === "kill"
+                            ? "bg-red-900/50 text-red-400"
+                            : review.decision === "park"
+                            ? "bg-yellow-900/50 text-yellow-400"
+                            : "bg-blue-900/50 text-blue-400"
+                        }`}
+                      >
+                        {review.decision}
+                      </span>
+                    </div>
+                    {review.reasoning && (
+                      <p className="text-sm text-gray-400 mb-2">{review.reasoning}</p>
+                    )}
+                    {review.next_hypothesis && (
+                      <div className="rounded bg-gray-950 border border-gray-800 p-2 mt-2">
+                        <span className="text-[10px] uppercase text-gray-600 font-semibold">
+                          Next Hypothesis
+                        </span>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {review.next_hypothesis}
+                        </p>
+                      </div>
+                    )}
+                    {review.gate_1_status_at_review && (
+                      <div className="flex gap-2 mt-2 text-[10px] text-gray-600">
+                        <span>G1: {review.gate_1_status_at_review}</span>
+                        <span>G2: {review.gate_2_status_at_review}</span>
+                        <span>G3: {review.gate_3_status_at_review}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}

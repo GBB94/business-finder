@@ -71,6 +71,7 @@ export interface Idea {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  archive_note: string | null;
   weighted_total: number | null;
   days_in_stage: number | null;
 }
@@ -255,6 +256,7 @@ export interface SynthesisResponse {
   evidence_cited: string[];
   gaps: string;
   model_version: string;
+  prompt_used?: string;
 }
 
 export interface InconsistencyItem {
@@ -268,6 +270,19 @@ export interface ConsistencyResponse {
   inconsistencies: InconsistencyItem[];
   overall_assessment: string;
   model_version: string;
+  prompt_used?: string;
+}
+
+export interface ScoreHistoryEntry {
+  id: string;
+  weighted_total: number | null;
+  dimensions_snapshot: Record<string, { score: number; note: string | null; weight: number }> | null;
+  snapshot_at: string;
+}
+
+export interface ScoreHistoryResponse {
+  items: ScoreHistoryEntry[];
+  total: number;
 }
 
 export interface ReviewSummaryResponse {
@@ -277,4 +292,5 @@ export interface ReviewSummaryResponse {
   key_developments: string[];
   open_questions: string[];
   model_version: string;
+  prompt_used?: string;
 }

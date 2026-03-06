@@ -46,3 +46,4 @@ class ReviewSummaryResponse(BaseModel):
     key_developments: list[str]
     open_questions: list[str]
     model_version: str
+    prompt_used: Optional[str] = None

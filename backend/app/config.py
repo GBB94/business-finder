@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     CLAUDE_MODEL: str = "claude-sonnet-4-5-20250929"
     REDDIT_USER_AGENT: str = "IdeaScope/0.1 by u/ideascope"
     DEFAULT_USER_ID: str = "00000000-0000-0000-0000-000000000001"
+    ANTHROPIC_ZDR_ENABLED: bool = False
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

@@ -6,10 +6,12 @@ from app.models.founder_profile import FounderProfile
 from app.models.monthly_review import MonthlyReview, ReviewDecision
 from app.models.config import ScoringWeight, SCORING_DIMENSIONS, DEFAULT_WEIGHTS
 from app.models.metric_entry import MetricEntry, MetricCategory
+from app.models.score_history import ScoreHistory
 
 __all__ = [
     "Idea", "IdeaStatus", "GateStatus", "OfferLadderRung", "ProductUseFrequency", "PaymentModel",
     "Score",
+    "ScoreHistory",
     "Evidence", "GateLabel", "EvidenceType", "SourceType", "Sentiment",
     "ResearchJob", "JobType", "JobStatus",
     "FounderProfile",

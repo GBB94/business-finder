@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import type { DimensionScore, WeightsResponse, SynthesisResponse, ConsistencyResponse } from "@/lib/types";
+import type { DimensionScore, WeightsResponse, SynthesisResponse, ConsistencyResponse, ScoreHistoryEntry } from "@/lib/types";
 import { apiFetch } from "@/lib/api";
 
 const DIMENSION_LABELS: Record<string, string> = {
@@ -22,10 +22,11 @@ interface ScoreCardProps {
   ideaId: string;
   score: DimensionScore[] | null;
   weights: WeightsResponse | null;
+  targetPricePoint?: number | null;
   onSave: (dimensions: { dimension: string; score: number; note?: string }[]) => void;
 }
 
-export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardProps) {
+export default function ScoreCard({ ideaId, score, weights, targetPricePoint, onSave }: ScoreCardProps) {
   const allDims = weights?.weights.map((w) => w.dimension) ?? Object.keys(DIMENSION_LABELS);
 
   const [values, setValues] = useState<Record<string, number | null>>(() => {
@@ -53,6 +54,12 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
   const [checking, setChecking] = useState(false);
   const [consistency, setConsistency] = useState<ConsistencyResponse | null>(null);
   const [checkError, setCheckError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<ScoreHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [valueTestAnswer, setValueTestAnswer] = useState("");
+  const [valueTestDismissed, setValueTestDismissed] = useState(false);
+  const [showPrompts, setShowPrompts] = useState<Record<string, boolean>>({});
 
   const handleSynthesize = async (dimension: string) => {
     setSynthesizing(dimension);
@@ -115,6 +122,25 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
     }
   };
 
+  const handleToggleHistory = async () => {
+    if (historyOpen) {
+      setHistoryOpen(false);
+      return;
+    }
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    try {
+      const data = await apiFetch<{ items: ScoreHistoryEntry[]; total: number }>(
+        `/api/ideas/${ideaId}/scores/history`
+      );
+      setHistory(data.items);
+    } catch {
+      setHistory([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   // Resync local state when props change (e.g. after async fetch)
   useEffect(() => {
     const newValues: Record<string, number | null> = {};
@@ -159,8 +185,52 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
     );
   });
 
+  const hasAnyScore = allDims.some((d) => values[d] !== null);
+  const showValueTest =
+    !hasAnyScore && !valueTestDismissed && targetPricePoint && targetPricePoint > 0;
+  const threeXValue = targetPricePoint ? targetPricePoint * 3 : 0;
+
   return (
     <div className="space-y-4">
+      {showValueTest && (
+        <div className="rounded-lg border border-amber-800 bg-amber-950/20 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">
+              Economic Value Test
+            </span>
+            <button
+              onClick={() => setValueTestDismissed(true)}
+              className="text-[10px] text-gray-600 hover:text-gray-400"
+            >
+              skip
+            </button>
+          </div>
+          <p className="text-sm text-gray-300">
+            At your target price of <span className="font-semibold">${targetPricePoint}/mo</span>,
+            can you describe how this saves or earns the customer at least{" "}
+            <span className="font-semibold">${threeXValue}/mo</span>?
+          </p>
+          <textarea
+            value={valueTestAnswer}
+            onChange={(e) => setValueTestAnswer(e.target.value)}
+            placeholder="Describe the economic value..."
+            className="w-full rounded bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-600 outline-none focus:ring-1 focus:ring-amber-500"
+            rows={3}
+          />
+          {valueTestAnswer.length > 0 && valueTestAnswer.length < 20 && (
+            <p className="text-xs text-amber-400">
+              Short answer — this may be a vitamin rather than a painkiller.
+            </p>
+          )}
+          <button
+            onClick={() => setValueTestDismissed(true)}
+            className="rounded bg-amber-800/50 px-3 py-1.5 text-xs font-medium text-amber-300 hover:bg-amber-800/70 transition-colors"
+          >
+            Continue to Scoring
+          </button>
+        </div>
+      )}
+
       {disqualifiers.length > 0 && (
         <div className="rounded-lg border border-red-800 bg-red-950/30 p-3 text-sm text-red-400">
           Disqualifiers fired: {disqualifiers.map((d) => DIMENSION_LABELS[d]).join(", ")}
@@ -207,6 +277,26 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
               <p className="text-xs text-gray-400">{inc.message}</p>
             </div>
           ))}
+          {consistency.prompt_used && (
+            <>
+              <button
+                onClick={() =>
+                  setShowPrompts((prev) => ({
+                    ...prev,
+                    _consistency: !prev._consistency,
+                  }))
+                }
+                className="text-[10px] text-gray-600 hover:text-gray-400"
+              >
+                {showPrompts._consistency ? "hide reasoning data" : "show reasoning data"}
+              </button>
+              {showPrompts._consistency && (
+                <pre className="mt-1 max-h-48 overflow-auto rounded bg-gray-950 p-2 text-[10px] text-gray-600 whitespace-pre-wrap">
+                  {consistency.prompt_used}
+                </pre>
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -358,6 +448,26 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
                           Gaps: {syntheses[dim].gaps}
                         </p>
                       )}
+                      {syntheses[dim].prompt_used && (
+                        <>
+                          <button
+                            onClick={() =>
+                              setShowPrompts((prev) => ({
+                                ...prev,
+                                [dim]: !prev[dim],
+                              }))
+                            }
+                            className="text-[10px] text-gray-600 hover:text-gray-400"
+                          >
+                            {showPrompts[dim] ? "hide reasoning data" : "show reasoning data"}
+                          </button>
+                          {showPrompts[dim] && (
+                            <pre className="mt-1 max-h-48 overflow-auto rounded bg-gray-950 p-2 text-[10px] text-gray-600 whitespace-pre-wrap">
+                              {syntheses[dim].prompt_used}
+                            </pre>
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
                 </>
@@ -376,6 +486,12 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
         </div>
         <div className="flex gap-2">
           <button
+            onClick={handleToggleHistory}
+            className="rounded-lg border border-gray-700 px-4 py-2 text-sm font-medium text-gray-400 hover:bg-gray-800 transition-colors"
+          >
+            {historyOpen ? "Hide History" : "History"}
+          </button>
+          <button
             onClick={handleCheckConsistency}
             disabled={checking}
             className="rounded-lg border border-purple-700 px-4 py-2 text-sm font-medium text-purple-400 hover:bg-purple-900/30 transition-colors disabled:opacity-50"
@@ -390,6 +506,56 @@ export default function ScoreCard({ ideaId, score, weights, onSave }: ScoreCardP
           </button>
         </div>
       </div>
+
+      {historyOpen && (
+        <div className="rounded-lg border border-gray-800 bg-gray-900 p-4 space-y-3">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+            Score History
+          </span>
+          {historyLoading ? (
+            <p className="text-xs text-gray-500">Loading…</p>
+          ) : history.length === 0 ? (
+            <p className="text-xs text-gray-600">No score history yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {history.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex items-center justify-between rounded border border-gray-800 bg-gray-950 px-3 py-2"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold text-gray-200">
+                      {entry.weighted_total?.toFixed(1) ?? "—"}
+                    </span>
+                    <span className="text-xs text-gray-600">
+                      {new Date(entry.snapshot_at).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+                  {entry.dimensions_snapshot && (
+                    <div className="flex gap-1">
+                      {Object.entries(entry.dimensions_snapshot).map(([dim, data]) => (
+                        <span
+                          key={dim}
+                          title={`${DIMENSION_LABELS[dim] ?? dim}: ${data.score}/5`}
+                          className="inline-block h-5 w-5 rounded text-[9px] font-medium flex items-center justify-center bg-gray-800 text-gray-400"
+                        >
+                          {data.score}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -98,6 +98,7 @@ class Idea(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    archive_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     scores = relationship("Score", back_populates="idea", cascade="all, delete-orphan")
     evidence = relationship("Evidence", back_populates="idea", cascade="all, delete-orphan")

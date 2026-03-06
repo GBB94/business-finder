@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import type { Idea, IdeaListResponse, IdeaStatus, FounderProfile } from "@/lib/types";
 import PipelineColumn from "@/components/PipelineColumn";
+import PortfolioView from "@/components/PortfolioView";
 
 const COLUMNS: { status: IdeaStatus; label: string }[] = [
   { status: "discovery", label: "Discovery" },
@@ -44,6 +45,7 @@ export default function PipelinePage() {
   const [loading, setLoading] = useState(true);
   const [dropError, setDropError] = useState<string | null>(null);
   const [profile, setProfile] = useState<FounderProfile | null>(null);
+  const [viewMode, setViewMode] = useState<"board" | "portfolio">("board");
 
   const fetchIdeas = async () => {
     try {
@@ -119,7 +121,31 @@ export default function PipelinePage() {
 
   return (
     <div className="p-6">
-      <h1 className="mb-6 text-2xl font-bold">Pipeline</h1>
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Pipeline</h1>
+        <div className="flex rounded-lg border border-gray-700 overflow-hidden">
+          <button
+            onClick={() => setViewMode("board")}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              viewMode === "board"
+                ? "bg-gray-700 text-gray-100"
+                : "bg-gray-900 text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Board
+          </button>
+          <button
+            onClick={() => setViewMode("portfolio")}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              viewMode === "portfolio"
+                ? "bg-gray-700 text-gray-100"
+                : "bg-gray-900 text-gray-500 hover:text-gray-300"
+            }`}
+          >
+            Portfolio
+          </button>
+        </div>
+      </div>
       {profile?.runway_months_remaining != null &&
         profile.runway_months_remaining <= profile.runway_floor_months && (
           <div className="mb-4 rounded-lg border border-red-800 bg-red-950/30 px-4 py-2 text-sm text-red-400">
@@ -140,19 +166,23 @@ export default function PipelinePage() {
           {dropError}
         </div>
       )}
-      <div className="flex gap-4 overflow-x-auto pb-4">
-        {COLUMNS.map((col) => (
-          <PipelineColumn
-            key={col.status}
-            status={col.status}
-            label={col.label}
-            ideas={ideas.filter((i) => i.status === col.status)}
-            onIdeaClick={handleIdeaClick}
-            onQuickAdd={col.status === "discovery" ? handleQuickAdd : undefined}
-            onDrop={handleDrop}
-          />
-        ))}
-      </div>
+      {viewMode === "board" ? (
+        <div className="flex gap-4 overflow-x-auto pb-4">
+          {COLUMNS.map((col) => (
+            <PipelineColumn
+              key={col.status}
+              status={col.status}
+              label={col.label}
+              ideas={ideas.filter((i) => i.status === col.status)}
+              onIdeaClick={handleIdeaClick}
+              onQuickAdd={col.status === "discovery" ? handleQuickAdd : undefined}
+              onDrop={handleDrop}
+            />
+          ))}
+        </div>
+      ) : (
+        <PortfolioView ideas={ideas} onIdeaClick={handleIdeaClick} />
+      )}
     </div>
   );
 }
