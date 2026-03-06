@@ -153,12 +153,19 @@ def fail_task(
     db: Session,
     task: AgentTask,
     error_message: str,
+    *,
+    terminal: bool = False,
 ) -> AgentTask:
-    """Mark task as failed. If retries remain, re-queue it."""
+    """Mark task as failed.
+
+    If ``terminal`` is True (e.g. missing handler, lock loss), go straight
+    to dead_letter regardless of retry count.  Otherwise re-queue if
+    retries remain.
+    """
     task.error_message = error_message[:2000]
     task.retry_count += 1
 
-    if task.retry_count >= task.max_retries:
+    if terminal or task.retry_count >= task.max_retries:
         task.status = "dead_letter"
         task.completed_at = datetime.now(timezone.utc)
     else:

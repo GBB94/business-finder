@@ -75,6 +75,7 @@ class _LockHeartbeat:
             self._thread.join(timeout=5)
 
     def _run(self):
+        consecutive_errors = 0
         while not self._stop.wait(timeout=LOCK_RENEW_INTERVAL):
             try:
                 conn = redis.from_url(self._redis_url)
@@ -88,10 +89,23 @@ class _LockHeartbeat:
                     )
                     self.lost.set()
                     break
+                consecutive_errors = 0
             except Exception:
+                consecutive_errors += 1
                 logger.exception(
-                    "Error renewing lock for %s/%s", self._idea_id, self._task_type,
+                    "Error renewing lock for %s/%s (attempt %d)",
+                    self._idea_id, self._task_type, consecutive_errors,
                 )
+                # If Redis is unreachable for 2 consecutive intervals
+                # (~2 minutes), the lock TTL (5 min) will expire soon.
+                # Signal lost to prevent running without a valid lock.
+                if consecutive_errors >= 2:
+                    logger.warning(
+                        "Redis unreachable for %d renewal attempts for %s/%s — signalling abort",
+                        consecutive_errors, self._idea_id, self._task_type,
+                    )
+                    self.lost.set()
+                    break
 
 
 def _execute_step(db, task, step):
@@ -174,12 +188,15 @@ def run_agent_task(task_id: str) -> None:
         logger.exception("AgentTask %s failed", task_id)
         db.rollback()
 
+        # Non-retryable errors go straight to dead_letter
+        is_terminal = isinstance(exc, (LockLostError, NotImplementedError))
+
         task = db.query(AgentTask).filter_by(id=task_id).first()
         if task:
-            fail_task(db, task, str(exc))
+            fail_task(db, task, str(exc), terminal=is_terminal)
 
-            # Re-enqueue if retries remain (but not for lock-loss or missing handlers)
-            if task.status == "queued" and not isinstance(exc, (LockLostError, NotImplementedError)):
+            # Re-enqueue if fail_task re-queued it (retries remain, retryable error)
+            if task.status == "queued":
                 try:
                     redis_conn = redis.from_url(settings.REDIS_URL)
                     from rq import Queue
