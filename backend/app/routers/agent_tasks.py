@@ -21,7 +21,7 @@ from app.schemas.agent_task import (
     AgentTaskResponse,
     AgentTaskListResponse,
 )
-from app.services.agent_task_service import create_task, cancel_task
+from app.services.agent_task_service import create_task, cancel_task, VALID_TASK_TYPES
 
 router = APIRouter(prefix="/api/ideas/{idea_id}/tasks", tags=["agent-tasks"])
 
@@ -41,6 +41,13 @@ def create_agent_task(
     current_user: User = Depends(get_current_user),
 ):
     _get_idea_or_404(idea_id, current_user.id, db)
+
+    if body.task_type not in VALID_TASK_TYPES:
+        raise HTTPException(
+            422,
+            f"Unknown task_type '{body.task_type}'. "
+            f"Valid types: {sorted(VALID_TASK_TYPES)}",
+        )
 
     task = create_task(
         db,

@@ -23,11 +23,28 @@ from app.routers import (
 
 
 def _seed_default_user(db):
-    """Create a default user if none exist."""
+    """Create a default user if none exist.
+
+    Only runs when SEED_DEV_USER=true AND both DEFAULT_USER_EMAIL and
+    DEFAULT_USER_PASSWORD are explicitly set.  Refuses to seed with
+    empty credentials so production can never boot with a known login.
+    """
+    if not settings.SEED_DEV_USER:
+        return
+
     from app.models.user import User
 
     if db.query(User).first():
         return
+
+    if not settings.DEFAULT_USER_EMAIL or not settings.DEFAULT_USER_PASSWORD:
+        import logging
+        logging.getLogger(__name__).warning(
+            "SEED_DEV_USER is true but DEFAULT_USER_EMAIL / DEFAULT_USER_PASSWORD "
+            "are empty — skipping user seed."
+        )
+        return
+
     user = User(
         email=settings.DEFAULT_USER_EMAIL,
         display_name="Admin",

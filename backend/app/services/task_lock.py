@@ -19,6 +19,24 @@ def acquire_project_lock(
     return token if acquired else None
 
 
+def renew_project_lock(
+    redis_conn: redis_lib.Redis,
+    idea_id: str,
+    task_type: str,
+    token: str,
+    ttl: int = 300,
+) -> bool:
+    """Extend a lock's TTL if it is still held by the given token."""
+    key = f"lock:agent:{idea_id}:{task_type}"
+    lua = (
+        "if redis.call('get',KEYS[1])==ARGV[1] then "
+        "  return redis.call('expire',KEYS[1],ARGV[2]) "
+        "else return 0 end"
+    )
+    result = redis_conn.eval(lua, 1, key, token, str(ttl))
+    return bool(result)
+
+
 def release_project_lock(
     redis_conn: redis_lib.Redis,
     idea_id: str,

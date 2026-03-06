@@ -31,6 +31,9 @@ services:
       - .env
     environment:
       - DATABASE_URL=postgresql://ideascope:ideascope_dev@postgres:5432/ideascope
+      - SEED_DEV_USER=true
+      - DEFAULT_USER_EMAIL=admin@ideascope.dev
+      - DEFAULT_USER_PASSWORD=changeme
 
   worker:
     build: ./backend

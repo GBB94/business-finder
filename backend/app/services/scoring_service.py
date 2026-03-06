@@ -62,8 +62,7 @@ def update_score_dimensions(
     score.disqualifiers_checked = check_disqualifiers(score)
 
     db.add(score)
-    db.commit()
-    db.refresh(score)
+    db.flush()
     return score
 
 
@@ -99,8 +98,11 @@ def compute_founder_constraints(profile: FounderProfile) -> tuple[int, str]:
     return score, note
 
 
-def apply_auto_constraints(db: Session, score: Score, *, commit: bool = True) -> Score:
-    """Compute and set founder_constraints from the founder profile."""
+def apply_auto_constraints(db: Session, score: Score) -> Score:
+    """Compute and set founder_constraints from the founder profile.
+
+    Flushes but does not commit — the caller owns the transaction boundary.
+    """
     from app.models.idea import Idea
 
     idea = db.query(Idea).filter_by(id=score.idea_id).first()
@@ -125,7 +127,5 @@ def apply_auto_constraints(db: Session, score: Score, *, commit: bool = True) ->
     score.weighted_total = compute_weighted_total(score, weights)
 
     db.add(score)
-    if commit:
-        db.commit()
-        db.refresh(score)
+    db.flush()
     return score

@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     ANTHROPIC_ZDR_ENABLED: bool = False
 
     # Auth
-    DEFAULT_USER_EMAIL: str = "admin@ideascope.dev"
-    DEFAULT_USER_PASSWORD: str = "changeme"
+    SEED_DEV_USER: bool = False
+    DEFAULT_USER_EMAIL: str = ""
+    DEFAULT_USER_PASSWORD: str = ""
     SESSION_SECRET_KEY: str = "change-me-to-a-random-string"
     SESSION_TTL_HOURS: int = 24
 

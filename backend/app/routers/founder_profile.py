@@ -84,7 +84,7 @@ def upsert_profile(
             .first()
         )
         if score:
-            apply_auto_constraints(db, score, commit=False)
+            apply_auto_constraints(db, score)
 
     db.commit()
     return _respond(profile)

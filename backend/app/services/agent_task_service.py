@@ -17,6 +17,8 @@ DEFAULT_STEPS: dict[str, list[str]] = {
     "review_summary": ["gather_metrics", "generate_summary", "store_result"],
 }
 
+VALID_TASK_TYPES: set[str] = set(DEFAULT_STEPS.keys())
+
 
 def create_task(
     db: Session,
