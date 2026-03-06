@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.models.idea import Idea
+from app.models.evidence import Evidence
 from app.models.monthly_review import MonthlyReview
+from app.models.score import Score
+from app.models.config import SCORING_DIMENSIONS
 from app.schemas.monthly_review import (
     MonthlyReviewCreate,
     MonthlyReviewResponse,
     MonthlyReviewListResponse,
+    ReviewSummaryResponse,
 )
 from app.services.idea_service import transition_status, evaluate_kill_triggers
-from app.services.metrics_service import build_metrics_snapshot
+from app.services.metrics_service import build_metrics_snapshot, build_metrics_dashboard
+from app.services.scoring_service import get_weights_map
+from app.services.synthesis_service import generate_review_summary, ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ideas/{idea_id}/reviews", tags=["monthly-reviews"])
 
@@ -84,4 +96,113 @@ def list_reviews(idea_id: str, db: Session = Depends(get_db)):
     return MonthlyReviewListResponse(
         items=[MonthlyReviewResponse.model_validate(r) for r in reviews],
         total=len(reviews),
+    )
+
+
+@router.post("/generate-summary", response_model=ReviewSummaryResponse)
+def generate_summary(idea_id: str, db: Session = Depends(get_db)):
+    idea = _get_idea_or_404(idea_id, db)
+
+    # Load current score
+    score = (
+        db.query(Score)
+        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .order_by(Score.scored_at.desc())
+        .first()
+    )
+    scores_summary = None
+    if score:
+        weights = get_weights_map(db)
+        dims = {}
+        for dim in SCORING_DIMENSIONS:
+            val = getattr(score, f"{dim}_score", None)
+            if val is not None:
+                dims[dim] = {"score": val, "weight": weights.get(dim, 0)}
+        scores_summary = {
+            "weighted_total": score.weighted_total,
+            "dimensions": dims,
+        }
+
+    # Load metrics dashboard
+    metrics_summary = build_metrics_dashboard(db, idea)
+
+    # Evaluate kill triggers
+    current_triggers = evaluate_kill_triggers(db, idea)
+    trigger_states = []
+    for key, t in current_triggers.items():
+        trigger_states.append({
+            "key": key,
+            "label": t.get("label", key),
+            "state": t.get("state", "green"),
+            "fired": t.get("fired", False),
+        })
+
+    # Load recent evidence (last 30 days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    evidence_rows = (
+        db.query(Evidence)
+        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID, content_purged=False)
+        .filter(Evidence.created_at >= cutoff)
+        .order_by(Evidence.created_at.desc())
+        .all()
+    )
+    recent_evidence = [
+        {
+            "id": ev.id,
+            "title": ev.title,
+            "evidence_type": ev.evidence_type.value if hasattr(ev.evidence_type, "value") else ev.evidence_type,
+            "content": ev.content,
+            "sentiment": ev.sentiment.value if hasattr(ev.sentiment, "value") else ev.sentiment,
+            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+        }
+        for ev in evidence_rows
+    ]
+
+    # Load previous reviews
+    prev_reviews = (
+        db.query(MonthlyReview)
+        .filter_by(idea_id=idea_id, user_id=settings.DEFAULT_USER_ID)
+        .order_by(MonthlyReview.review_date.desc())
+        .limit(5)
+        .all()
+    )
+    previous_reviews = [
+        {
+            "review_date": str(r.review_date),
+            "decision": r.decision,
+            "reasoning": r.reasoning,
+        }
+        for r in prev_reviews
+    ]
+
+    idea_status = idea.status if isinstance(idea.status, str) else idea.status.value
+
+    try:
+        result = asyncio.run(
+            generate_review_summary(
+                idea_name=idea.name,
+                idea_audience=idea.audience,
+                idea_problem=idea.problem_statement,
+                idea_solution=idea.proposed_solution,
+                idea_status=idea_status,
+                scores_summary=scores_summary,
+                metrics_summary=metrics_summary,
+                trigger_states=trigger_states,
+                recent_evidence=recent_evidence,
+                previous_reviews=previous_reviews,
+            )
+        )
+    except ConfigurationError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception:
+        logger.exception("Review summary generation failed for idea=%s", idea_id)
+        raise HTTPException(502, "AI summary generation failed. Please try again.")
+
+    return ReviewSummaryResponse(
+        summary=result.summary,
+        metrics_assessment=result.metrics_assessment,
+        trigger_status=result.trigger_status,
+        key_developments=result.key_developments,
+        open_questions=result.open_questions,
+        model_version=result.model_version,
     )

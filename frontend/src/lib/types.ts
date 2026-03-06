@@ -86,6 +86,7 @@ export interface DimensionScore {
   note: string | null;
   weight: number;
   weighted_contribution: number | null;
+  auto_computed?: boolean;
 }
 
 export interface ScoreResponse {
@@ -225,4 +226,55 @@ export interface MetricsDashboardResponse {
   economics_metrics: MetricWithBenchmark[];
   computed_metrics: ComputedMetric[];
   trigger_states: TriggerState[];
+}
+
+// Research types
+export interface ResearchJob {
+  id: string;
+  idea_id: string | null;
+  job_type: string;
+  status: "queued" | "running" | "completed" | "failed" | "dead_letter";
+  retry_count: number;
+  input_params: Record<string, unknown> | null;
+  results: Record<string, unknown> | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface ResearchJobListResponse {
+  items: ResearchJob[];
+  total: number;
+}
+
+export interface SynthesisResponse {
+  dimension: string;
+  summary: string;
+  key_findings: string[];
+  evidence_cited: string[];
+  gaps: string;
+  model_version: string;
+}
+
+export interface InconsistencyItem {
+  dimension: string;
+  severity: "warning" | "critical";
+  message: string;
+  evidence_ids: string[];
+}
+
+export interface ConsistencyResponse {
+  inconsistencies: InconsistencyItem[];
+  overall_assessment: string;
+  model_version: string;
+}
+
+export interface ReviewSummaryResponse {
+  summary: string;
+  metrics_assessment: string;
+  trigger_status: string;
+  key_developments: string[];
+  open_questions: string[];
+  model_version: string;
 }

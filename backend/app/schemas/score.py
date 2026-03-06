@@ -36,6 +36,7 @@ class DimensionScoreResponse(BaseModel):
     note: Optional[str]
     weight: float
     weighted_contribution: Optional[float]
+    auto_computed: bool = False
 
 
 class ScoreResponse(BaseModel):
@@ -49,3 +50,29 @@ class ScoreResponse(BaseModel):
     scored_at: datetime
     updated_at: datetime
     dimensions: list[DimensionScoreResponse] = []
+
+
+class SynthesizeRequest(BaseModel):
+    dimension: str
+
+
+class SynthesisResponse(BaseModel):
+    dimension: str
+    summary: str
+    key_findings: list[str]
+    evidence_cited: list[str]
+    gaps: str
+    model_version: str
+
+
+class InconsistencyItem(BaseModel):
+    dimension: str
+    severity: str
+    message: str
+    evidence_ids: list[str] = []
+
+
+class ConsistencyResponse(BaseModel):
+    inconsistencies: list[InconsistencyItem]
+    overall_assessment: str
+    model_version: str

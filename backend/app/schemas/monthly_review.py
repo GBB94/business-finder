@@ -37,3 +37,12 @@ class MonthlyReviewResponse(BaseModel):
 class MonthlyReviewListResponse(BaseModel):
     items: list[MonthlyReviewResponse]
     total: int
+
+
+class ReviewSummaryResponse(BaseModel):
+    summary: str
+    metrics_assessment: str
+    trigger_status: str
+    key_developments: list[str]
+    open_questions: list[str]
+    model_version: str
