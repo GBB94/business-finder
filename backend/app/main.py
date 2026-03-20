@@ -19,6 +19,9 @@ from app.routers import (
     research,
     agent_tasks,
     project_secrets,
+    launches,
+    approvals,
+    webhooks,
 )
 
 
@@ -102,12 +105,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from app.middleware.csrf import CSRFMiddleware
+
+# CSRF protection must be added before CORS so it runs after CORS
+# (middleware order is LIFO in Starlette).
+app.add_middleware(CSRFMiddleware)
+
+_cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*", "X-CSRF-Token"],
 )
 
 app.include_router(health.router)
@@ -122,3 +132,6 @@ app.include_router(metrics.router)
 app.include_router(research.router)
 app.include_router(agent_tasks.router)
 app.include_router(project_secrets.router)
+app.include_router(launches.router)
+app.include_router(approvals.router)
+app.include_router(webhooks.router)

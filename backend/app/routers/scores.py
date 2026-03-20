@@ -247,6 +247,7 @@ def synthesize(
                 current_score=current_score,
                 current_note=current_note,
                 evidence_items=evidence_items,
+                model=get_model_for_task("evidence_synthesis"),
             )
         )
     except ConfigurationError as exc:
@@ -310,6 +311,7 @@ def check_consistency(
         for ev in evidence_rows
     ]
 
+    from app.services.agent_task_service import get_model_for_task
     try:
         result = asyncio.run(
             check_score_consistency(
@@ -319,6 +321,7 @@ def check_consistency(
                 idea_solution=idea.proposed_solution,
                 scores=scores_list,
                 evidence_items=evidence_items,
+                model=get_model_for_task("consistency_check"),
             )
         )
     except ConfigurationError as exc:

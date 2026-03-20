@@ -8,10 +8,17 @@ from app.config import settings
 
 def main():
     conn = redis.from_url(settings.REDIS_URL)
-    worker = Worker(
-        [Queue("agent_tasks", connection=conn), Queue("default", connection=conn)],
-        connection=conn,
-    )
+    queues = [
+        Queue("agent_tasks", connection=conn),
+        Queue("default", connection=conn),
+        # LaunchPad dedicated queues (consumed by split workers in production,
+        # but this generic worker handles them all in dev)
+        Queue("provision", connection=conn),
+        Queue("engineering", connection=conn),
+        Queue("ceo", connection=conn),
+        Queue("marketing", connection=conn),
+    ]
+    worker = Worker(queues, connection=conn)
     worker.work()
 
 

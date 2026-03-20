@@ -11,6 +11,12 @@ from app.models.metric_entry import MetricEntry, MetricCategory
 from app.models.score_history import ScoreHistory
 from app.models.agent_task import AgentTask, AgentTaskStep
 from app.models.project_secret import ProjectSecret
+from app.models.launch_instance import LaunchInstance
+from app.models.operational_event import OperationalEvent
+from app.models.audit_log import AuditLog
+from app.models.daily_log import DailyLog
+from app.models.approval_grant import ApprovalGrant
+from app.models.project_metrics_daily import ProjectMetricsDaily
 
 __all__ = [
     "User",
@@ -26,4 +32,10 @@ __all__ = [
     "MetricEntry", "MetricCategory",
     "AgentTask", "AgentTaskStep",
     "ProjectSecret",
+    "LaunchInstance",
+    "OperationalEvent",
+    "AuditLog",
+    "DailyLog",
+    "ApprovalGrant",
+    "ProjectMetricsDaily",
 ]

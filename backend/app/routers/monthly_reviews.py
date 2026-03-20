@@ -195,6 +195,7 @@ def generate_summary(
 
     idea_status = idea.status if isinstance(idea.status, str) else idea.status.value
 
+    from app.services.agent_task_service import get_model_for_task
     try:
         result = asyncio.run(
             generate_review_summary(
@@ -208,6 +209,7 @@ def generate_summary(
                 trigger_states=trigger_states,
                 recent_evidence=recent_evidence,
                 previous_reviews=previous_reviews,
+                model=get_model_for_task("review_summary"),
             )
         )
     except ConfigurationError as exc:

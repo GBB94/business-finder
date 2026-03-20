@@ -295,6 +295,145 @@ export interface ReviewSummaryResponse {
   prompt_used?: string;
 }
 
+// Launch types
+export type LaunchStatus =
+  | "provisioning"
+  | "preview"
+  | "active"
+  | "paused"
+  | "killed";
+
+export interface LaunchInstance {
+  id: string;
+  idea_id: string;
+  user_id: string;
+  status: LaunchStatus;
+  github_repo_url: string | null;
+  preview_url: string | null;
+  production_url: string | null;
+  secret_ref: string | null;
+  daily_budget_cap: number | null;
+  total_spend_to_date: number;
+  created_at: string;
+  updated_at: string | null;
+  idea_name: string | null;
+}
+
+export interface LaunchListResponse {
+  items: LaunchInstance[];
+  total: number;
+}
+
+export interface OperationalEvent {
+  id: string;
+  launch_id: string;
+  event_type: string;
+  payload: Record<string, unknown> | null;
+  promoted_to_evidence: boolean;
+  evidence_id: string | null;
+  created_at: string;
+}
+
+export interface OperationalEventListResponse {
+  items: OperationalEvent[];
+  total: number;
+}
+
+export interface ProjectMetricsDaily {
+  id: string;
+  launch_id: string;
+  date: string;
+  signups: number;
+  active_users: number;
+  activation_count: number;
+  activation_rate: number | null;
+  revenue_cents: number;
+  ad_spend_cents: number;
+  ai_cost_cents: number;
+  total_spend_cents: number;
+  error_count: number;
+  support_tickets_received: number;
+  uptime_pct: number | null;
+  created_at: string;
+}
+
+export interface ProjectMetricsDailyListResponse {
+  items: ProjectMetricsDaily[];
+  total: number;
+}
+
+export interface DailyLog {
+  id: string;
+  launch_id: string;
+  date: string;
+  tasks_executed: Record<string, unknown>[] | null;
+  metrics_snapshot: Record<string, unknown> | null;
+  ceo_reasoning: string | null;
+  anomalies_flagged: string | null;
+  pending_approvals: Record<string, unknown>[] | null;
+  next_day_plan: string | null;
+  ai_cost_today: number | null;
+  created_at: string;
+}
+
+export interface DailyLogListResponse {
+  items: DailyLog[];
+  total: number;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  launch_id: string | null;
+  actor: string;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  details: Record<string, unknown> | null;
+  ip_address: string | null;
+  created_at: string;
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogEntry[];
+  total: number;
+}
+
+export interface PendingApproval {
+  id: string;
+  task_id: string;
+  launch_id: string;
+  task_type: string;
+  channel_or_provider: string | null;
+  summary: string;
+  details: Record<string, unknown> | null;
+  artifact_id: string | null;
+  expires_at: string | null;
+  approval_token: string | null;
+  created_at: string;
+}
+
+export interface PendingApprovalListResponse {
+  items: PendingApproval[];
+  total: number;
+}
+
+export interface ApprovalGrant {
+  id: string;
+  launch_id: string;
+  task_type: string;
+  channel_or_provider: string | null;
+  granted_at: string;
+  granted_by: string;
+  original_task_id: string | null;
+  revoked_at: string | null;
+  revoke_reason: string | null;
+}
+
+export interface ApprovalGrantListResponse {
+  items: ApprovalGrant[];
+  total: number;
+}
+
 // Agent Task types
 export type AgentTaskStatus =
   | "queued"

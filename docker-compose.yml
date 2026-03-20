@@ -48,6 +48,53 @@ services:
     environment:
       - DATABASE_URL=postgresql://ideascope:ideascope_dev@postgres:5432/ideascope
 
+  worker-provision:
+    build: ./backend
+    command: python -c "from redis import Redis; from rq import Worker; from app.config import settings; Worker(['provision'], connection=Redis.from_url(settings.REDIS_URL)).work()"
+    volumes:
+      - ./backend:/app
+      - envfiles_data:/data/envfiles
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://ideascope:ideascope_dev@postgres:5432/ideascope
+
+  worker-engineering:
+    build: ./backend
+    command: python -c "from redis import Redis; from rq import Worker; from app.config import settings; Worker(['engineering'], connection=Redis.from_url(settings.REDIS_URL)).work()"
+    volumes:
+      - ./backend:/app
+      - envfiles_data:/data/envfiles
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://ideascope:ideascope_dev@postgres:5432/ideascope
+
+  worker-ceo:
+    build: ./backend
+    command: python -c "from redis import Redis; from rq import Worker; from app.config import settings; Worker(['ceo'], connection=Redis.from_url(settings.REDIS_URL)).work()"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://ideascope:ideascope_dev@postgres:5432/ideascope
+
   redis:
     image: redis:7-alpine
     ports:
@@ -68,3 +115,4 @@ services:
 volumes:
   redis_data:
   pg_data:
+  envfiles_data:

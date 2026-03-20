@@ -25,6 +25,7 @@ from app.services.agent_task_service import (
     fail_task,
 )
 from app.services.task_lock import acquire_project_lock, renew_project_lock, release_project_lock
+from app.services.workdir_service import create_workdir, cleanup_workdir
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +34,58 @@ WORKER_ID = f"worker-{uuid.uuid4().hex[:8]}"
 LOCK_TTL = 300        # 5 minutes
 LOCK_RENEW_INTERVAL = 60  # renew every 60 seconds
 
+# Task types that get an ephemeral working directory
+WORKDIR_TASK_TYPES: set[str] = {"scaffold", "deploy", "promote", "provision"}
+
 
 class LockLostError(RuntimeError):
     """Raised when the advisory lock can no longer be renewed."""
 
 
+# --- Queue routing -----------------------------------------------------------
+# Map task types to their dedicated RQ queues so split workers pick them up.
+TASK_QUEUE_MAP: dict[str, str] = {
+    "provision": "provision",
+    "scaffold": "engineering",
+    "deploy": "engineering",
+    "promote": "engineering",
+    "metrics_collection": "ceo",
+    "ceo_nightly": "ceo",
+    "send_cold_emails": "marketing",
+    "post_social": "marketing",
+    "write_content": "marketing",
+}
+
+def _queue_for_task(task_type: str) -> str:
+    """Return the RQ queue name for a given task type."""
+    return TASK_QUEUE_MAP.get(task_type, "agent_tasks")
+
+
+# --- Approval classification --------------------------------------------------
+# Task types that require founder approval. "approve_once" checks for a standing
+# grant first; "always_approve" always pauses for explicit approval.
+APPROVE_ONCE_TYPES: set[str] = {
+    "scaffold", "deploy",
+    # Note: send_cold_emails and post_social only generate drafts in Phase 2.
+    # Approval gates will be added when send/publish steps are implemented.
+}
+ALWAYS_APPROVE_TYPES: set[str] = {
+    "promote",
+}
+# Everything else (provision, metrics_collection, ceo_nightly, community_scan,
+# evidence_synthesis, consistency_check, review_summary, write_content) is auto-execute.
+# Note: write_content generates drafts only (no external action), so no approval needed.
+
+
+class TokenBudgetExceeded(RuntimeError):
+    """Raised when a task exceeds its per-task token budget."""
+
+
 # --- Step handler registry ---------------------------------------------------
 # Map (task_type, step_name) → callable(db, task, step, input_data) → dict
-# When real handlers are wired, register them here.
-STEP_HANDLERS: dict[tuple[str, str], object] = {}
+from app.jobs.step_handlers import HANDLER_REGISTRY, ApprovalRequired
+from app.services.budget_service import BudgetExceeded
+STEP_HANDLERS: dict[tuple[str, str], object] = HANDLER_REGISTRY
 
 
 class _LockHeartbeat:
@@ -128,6 +172,7 @@ def run_agent_task(task_id: str) -> None:
     idea_id = None
     task_type = None
     heartbeat = None
+    workdir_path = None
 
     try:
         task = db.query(AgentTask).filter_by(id=task_id).first()
@@ -148,7 +193,7 @@ def run_agent_task(task_id: str) -> None:
             if not lock_token:
                 logger.info("Lock held for %s/%s — re-enqueueing task %s", idea_id, task_type, task_id)
                 from rq import Queue
-                q = Queue("agent_tasks", connection=redis_conn)
+                q = Queue(_queue_for_task(task_type), connection=redis_conn)
                 q.enqueue_in(
                     timedelta(seconds=30),
                     "app.jobs.agent_task_runner.run_agent_task",
@@ -169,6 +214,48 @@ def run_agent_task(task_id: str) -> None:
 
         task = start_task(db, task)
 
+        # --- Approve-once gate check ---
+        # For approve-once task types, check for a standing grant.
+        # If no grant exists and no explicit approval, pause for approval.
+        if task.task_type in APPROVE_ONCE_TYPES and task.approval_status != "approved":
+            if task.launch_id:
+                from app.services.approval_service import check_grant, create_approval_request
+                grant = check_grant(db, task.launch_id, task.task_type)
+                if grant:
+                    task.approval_status = "approved"
+                    db.commit()
+                    logger.info(
+                        "Task %s auto-approved via grant %s", task_id, grant.id,
+                    )
+                else:
+                    # No grant, no approval. Create approval request and pause.
+                    raw_token = create_approval_request(db, task)
+                    task.status = "waiting_for_approval"
+                    db.commit()
+
+                    # Deliver the raw token via email only (never persisted in DB)
+                    from app.jobs.step_handlers import _send_approval_notification
+                    _send_approval_notification(db, task, raw_token)
+                    logger.info(
+                        "Task %s (%s) requires approve-once approval, pausing",
+                        task_id, task.task_type,
+                    )
+                    return
+
+        # --- Ephemeral workdir for engineering tasks ---
+        if task.task_type in WORKDIR_TASK_TYPES:
+            workdir_path = create_workdir(task.id)
+            task.input_params = {**(task.input_params or {}), "workdir": workdir_path}
+            db.commit()
+            logger.info("Assigned workdir=%s for task=%s", workdir_path, task_id)
+
+        # --- Token budget enforcement ---
+        if task.token_budget and task.tokens_used and task.tokens_used >= task.token_budget:
+            raise TokenBudgetExceeded(
+                f"Task {task_id} has already used {task.tokens_used} tokens "
+                f"(budget: {task.token_budget})"
+            )
+
         # Execute steps in order
         for step in sorted(task.steps, key=lambda s: s.step_order):
             # Abort if the lock was lost between steps
@@ -184,6 +271,30 @@ def run_agent_task(task_id: str) -> None:
             try:
                 output = _execute_step(db, task, step)
                 step = complete_step(db, step, output_data=output)
+
+                # Accumulate per-step token usage into the task total
+                if step.tokens_used:
+                    task.tokens_used = (task.tokens_used or 0) + step.tokens_used
+                    db.commit()
+
+                # Check token budget after each step
+                if task.token_budget and (task.tokens_used or 0) >= task.token_budget:
+                    raise TokenBudgetExceeded(
+                        f"Task {task_id} exceeded token budget after step '{step.step_name}': "
+                        f"used {task.tokens_used}, budget {task.token_budget}"
+                    )
+            except ApprovalRequired:
+                # Not a failure. The step created an approval request and
+                # the task should pause until the founder approves.
+                step.status = "pending"
+                step.completed_at = None
+                task.status = "waiting_for_approval"
+                db.commit()
+                logger.info(
+                    "AgentTask %s paused at step '%s' — waiting for approval",
+                    task_id, step.step_name,
+                )
+                return  # Exit cleanly, no failure handling
             except Exception as exc:
                 fail_step(db, step, str(exc))
                 raise
@@ -196,7 +307,7 @@ def run_agent_task(task_id: str) -> None:
         db.rollback()
 
         # Non-retryable errors go straight to dead_letter
-        is_terminal = isinstance(exc, (LockLostError, NotImplementedError))
+        is_terminal = isinstance(exc, (LockLostError, NotImplementedError, TokenBudgetExceeded, BudgetExceeded))
 
         task = db.query(AgentTask).filter_by(id=task_id).first()
         if task:
@@ -207,7 +318,7 @@ def run_agent_task(task_id: str) -> None:
                 try:
                     redis_conn = redis.from_url(settings.REDIS_URL)
                     from rq import Queue
-                    q = Queue("agent_tasks", connection=redis_conn)
+                    q = Queue(_queue_for_task(task.task_type), connection=redis_conn)
                     q.enqueue(
                         "app.jobs.agent_task_runner.run_agent_task",
                         task.id,
@@ -218,6 +329,10 @@ def run_agent_task(task_id: str) -> None:
         # Stop heartbeat before releasing lock
         if heartbeat:
             heartbeat.stop()
+
+        # Clean up ephemeral working directory
+        if workdir_path:
+            cleanup_workdir(workdir_path)
 
         # Release advisory lock
         if lock_token and idea_id and task_type:

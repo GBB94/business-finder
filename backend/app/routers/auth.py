@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.dependencies.auth import get_current_user
+from app.middleware.csrf import generate_csrf_token
 from app.models.session import UserSession
 from app.models.user import User
 from app.schemas.auth import LoginRequest, UserResponse
@@ -39,6 +40,17 @@ def login(body: LoginRequest, response: Response, db: Session = Depends(get_db))
         max_age=settings.SESSION_TTL_HOURS * 3600,
         path="/",
     )
+    # CSRF token cookie: readable by JS so the frontend can send it
+    # as X-CSRF-Token header on state-changing requests.
+    response.set_cookie(
+        key="csrf_token",
+        value=generate_csrf_token(session.id),
+        httponly=False,
+        samesite="lax",
+        secure=settings.COOKIE_SECURE,
+        max_age=settings.SESSION_TTL_HOURS * 3600,
+        path="/",
+    )
     return UserResponse.model_validate(user)
 
 
@@ -52,6 +64,7 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)):
             db.commit()
 
     response.delete_cookie(key="session_id", path="/")
+    response.delete_cookie(key="csrf_token", path="/")
     return {"ok": True}
 
 

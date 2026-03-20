@@ -36,6 +36,7 @@ class AnalysisResult:
     objections: list[str] = field(default_factory=list)
     sales_safari_summary: str = ""
     model_version: str = ""
+    tokens_used: int = 0
 
 
 SYSTEM_PROMPT = """\
@@ -164,4 +165,5 @@ async def analyze_community_posts(
         objections=data.get("objections", []),
         sales_safari_summary=data.get("sales_safari_summary", ""),
         model_version=model,
+        tokens_used=message.usage.input_tokens + message.usage.output_tokens,
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Index
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Index
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -30,6 +30,18 @@ class AgentTask(Base):
     claimed_by = Column(String(255), nullable=True)
     claimed_at = Column(DateTime, nullable=True)
 
+    # LaunchPad columns
+    launch_id = Column(String(36), ForeignKey("launch_instances.id"), nullable=True, index=True)
+    agent_type = Column(String(20), nullable=True)  # ceo, engineering, marketing, support
+    approval_status = Column(String(20), nullable=True, default="auto")  # auto, pending_approval, approved, rejected
+    approval_token_hash = Column(String(64), nullable=True)
+    approval_expires_at = Column(DateTime, nullable=True)
+    approval_used_at = Column(DateTime, nullable=True)
+    approval_artifact_id = Column(String(255), nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+    token_budget = Column(Integer, nullable=True)
+    model_used = Column(String(50), nullable=True)
+
     steps = relationship("AgentTaskStep", back_populates="task", cascade="all, delete-orphan", order_by="AgentTaskStep.step_order")
 
 
@@ -46,5 +58,12 @@ class AgentTaskStep(Base):
     error_message = Column(String(2000), nullable=True)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+
+    # LaunchPad columns
+    skippable = Column(Boolean, default=False)
+    provider_idempotency_key = Column(String(255), nullable=True)
+    provider_object_id = Column(String(255), nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+    retry_count = Column(Integer, default=0)
 
     task = relationship("AgentTask", back_populates="steps")

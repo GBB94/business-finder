@@ -126,12 +126,14 @@ async def _run_scan_pipeline(db: Session, job: ResearchJob) -> None:
         db.commit()
         return
 
+    from app.services.agent_task_service import get_model_for_task
     analysis = await analyze_community_posts(
         idea_name=idea.name,
         idea_audience=idea.audience,
         idea_problem=idea.problem_statement,
         idea_solution=idea.proposed_solution,
         posts=unique_posts,
+        model=get_model_for_task("community_scan"),
     )
 
     evidence_count = 0

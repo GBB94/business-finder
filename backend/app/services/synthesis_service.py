@@ -38,6 +38,7 @@ class SynthesisResult:
     gaps: str = ""
     model_version: str = ""
     prompt_used: str = ""
+    tokens_used: int = 0
 
 
 @dataclass
@@ -46,6 +47,7 @@ class ConsistencyResult:
     overall_assessment: str = ""
     model_version: str = ""
     prompt_used: str = ""
+    tokens_used: int = 0
 
 
 @dataclass
@@ -57,6 +59,7 @@ class ReviewSummaryResult:
     open_questions: list[str] = field(default_factory=list)
     model_version: str = ""
     prompt_used: str = ""
+    tokens_used: int = 0
 
 
 _REDDIT_SOURCES = {"reddit"}
@@ -125,13 +128,14 @@ async def synthesize_evidence_for_dimension(
     current_score: int | None,
     current_note: str | None,
     evidence_items: list[dict],
+    model: str | None = None,
 ) -> SynthesisResult:
     if not settings.ANTHROPIC_API_KEY:
         raise ConfigurationError(
             "ANTHROPIC_API_KEY is not set. Configure it in your environment to enable AI synthesis."
         )
 
-    model = settings.CLAUDE_MODEL
+    model = model or settings.CLAUDE_MODEL
     dim_description = DIMENSION_DESCRIPTIONS.get(dimension, dimension_label)
 
     # Strip raw Reddit content when ZDR is not enabled
@@ -218,6 +222,7 @@ async def synthesize_evidence_for_dimension(
         gaps=data.get("gaps", ""),
         model_version=model,
         prompt_used=user_prompt,
+        tokens_used=message.usage.input_tokens + message.usage.output_tokens,
     )
 
 
@@ -265,13 +270,14 @@ async def check_score_consistency(
     idea_solution: str,
     scores: list[dict],
     evidence_items: list[dict],
+    model: str | None = None,
 ) -> ConsistencyResult:
     if not settings.ANTHROPIC_API_KEY:
         raise ConfigurationError(
             "ANTHROPIC_API_KEY is not set. Configure it in your environment to enable AI features."
         )
 
-    model = settings.CLAUDE_MODEL
+    model = model or settings.CLAUDE_MODEL
 
     if not scores:
         return ConsistencyResult(
@@ -350,6 +356,7 @@ async def check_score_consistency(
         overall_assessment=data.get("overall_assessment", ""),
         model_version=model,
         prompt_used=user_prompt,
+        tokens_used=message.usage.input_tokens + message.usage.output_tokens,
     )
 
 
@@ -394,13 +401,14 @@ async def generate_review_summary(
     trigger_states: list[dict],
     recent_evidence: list[dict],
     previous_reviews: list[dict],
+    model: str | None = None,
 ) -> ReviewSummaryResult:
     if not settings.ANTHROPIC_API_KEY:
         raise ConfigurationError(
             "ANTHROPIC_API_KEY is not set. Configure it in your environment to enable AI features."
         )
 
-    model = settings.CLAUDE_MODEL
+    model = model or settings.CLAUDE_MODEL
 
     # Strip raw Reddit content when ZDR is not enabled
     if not settings.ANTHROPIC_ZDR_ENABLED:
@@ -479,4 +487,5 @@ async def generate_review_summary(
         open_questions=data.get("open_questions", []),
         model_version=model,
         prompt_used=user_prompt,
+        tokens_used=message.usage.input_tokens + message.usage.output_tokens,
     )

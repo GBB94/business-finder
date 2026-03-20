@@ -9,12 +9,14 @@ import redis
 from rq import Queue
 
 from app.config import settings
+from app.jobs.agent_task_runner import _queue_for_task
 
 logger = logging.getLogger(__name__)
 from app.database import get_db
 from app.dependencies.auth import get_current_user
 from app.models.agent_task import AgentTask
 from app.models.idea import Idea
+from app.models.launch_instance import LaunchInstance
 from app.models.user import User
 from app.schemas.agent_task import (
     AgentTaskCreate,
@@ -24,6 +26,12 @@ from app.schemas.agent_task import (
 from app.services.agent_task_service import create_task, cancel_task, VALID_TASK_TYPES
 
 router = APIRouter(prefix="/api/ideas/{idea_id}/tasks", tags=["agent-tasks"])
+
+# Task types that belong to LaunchPad and require a launch_id
+LAUNCHPAD_TASK_TYPES = {
+    "provision", "scaffold", "deploy", "promote",
+    "metrics_collection", "ceo_nightly",
+}
 
 
 def _get_idea_or_404(idea_id: str, user_id: str, db: Session) -> Idea:
@@ -40,7 +48,7 @@ def create_agent_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _get_idea_or_404(idea_id, current_user.id, db)
+    idea = _get_idea_or_404(idea_id, current_user.id, db)
 
     if body.task_type not in VALID_TASK_TYPES:
         raise HTTPException(
@@ -48,6 +56,32 @@ def create_agent_task(
             f"Unknown task_type '{body.task_type}'. "
             f"Valid types: {sorted(VALID_TASK_TYPES)}",
         )
+
+    # LaunchPad task types require a launch_id
+    if body.task_type in LAUNCHPAD_TASK_TYPES:
+        if not body.launch_id:
+            raise HTTPException(
+                422,
+                f"Task type '{body.task_type}' requires a launch_id.",
+            )
+        launch = db.query(LaunchInstance).filter_by(
+            id=body.launch_id, user_id=current_user.id,
+        ).first()
+        if not launch:
+            raise HTTPException(404, "Launch not found")
+        # Verify the launch belongs to the idea in the URL
+        if launch.idea_id != idea_id:
+            raise HTTPException(
+                400,
+                "Launch does not belong to this idea.",
+            )
+    elif body.launch_id:
+        # Non-LaunchPad task with optional launch_id: still validate ownership
+        launch = db.query(LaunchInstance).filter_by(
+            id=body.launch_id, user_id=current_user.id
+        ).first()
+        if not launch:
+            raise HTTPException(404, "Launch not found")
 
     task = create_task(
         db,
@@ -59,11 +93,20 @@ def create_agent_task(
         input_params=body.input_params,
     )
 
-    # Enqueue to RQ agent_tasks queue
+    # Set LaunchPad fields if provided
+    if body.launch_id:
+        task.launch_id = body.launch_id
+    if body.agent_type:
+        task.agent_type = body.agent_type
+    db.commit()
+    db.refresh(task)
+
+    # Enqueue to the correct queue based on task type
     if task.status == "queued":
         try:
             conn = redis.from_url(settings.REDIS_URL)
-            q = Queue("agent_tasks", connection=conn)
+            queue_name = _queue_for_task(body.task_type)
+            q = Queue(queue_name, connection=conn)
             q.enqueue(
                 "app.jobs.agent_task_runner.run_agent_task",
                 task.id,

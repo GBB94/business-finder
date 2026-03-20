@@ -11,6 +11,8 @@ class AgentTaskCreate(BaseModel):
     priority: int = 0
     idempotency_key: Optional[str] = None
     input_params: Optional[dict] = None
+    launch_id: Optional[str] = None
+    agent_type: Optional[str] = None
 
 
 class AgentTaskStepResponse(BaseModel):

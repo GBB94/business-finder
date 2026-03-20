@@ -27,8 +27,19 @@ PGPASSWORD="${PGPASSWORD:-ideascope_dev}" pg_dump \
 
 echo "Backup created: ${BACKUP_FILE}"
 
-# Prune old backups beyond retention period
+# Prune old database backups beyond retention period
 find "${BACKUP_DIR}" -name "ideascope-*.dump" -type f -mtime "+${RETENTION_DAYS}" -delete
 
-echo "Pruned backups older than ${RETENTION_DAYS} days."
+echo "Pruned database backups older than ${RETENTION_DAYS} days."
+
+# Encrypted env file backup (requires SECRETS_MASTER_KEY)
+# Invoke the file directly to avoid app/services/__init__.py which pulls in
+# DB/model code that is not needed for the backup CLI.
+echo "Backing up env files (encrypted)..."
+BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if ! PYTHONPATH="${BACKEND_DIR}" python3 "${BACKEND_DIR}/app/services/backup_service.py" backup --out "${BACKUP_DIR}"; then
+  echo "ERROR: Env file backup FAILED." >&2
+  exit 1
+fi
+
 echo "Backup complete."
