@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -29,13 +30,13 @@ class SupportThreadResponse(BaseModel):
     status: str
     messages: list = []
     confidence_score: Optional[float] = None
-    escalated_at: Optional[str] = None
+    escalated_at: Optional[datetime] = None
     escalation_reason: Optional[str] = None
     feature_request_extracted: bool = False
     evidence_id: Optional[str] = None
     message_count: int = 0
-    created_at: str
-    updated_at: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

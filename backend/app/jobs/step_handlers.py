@@ -1383,9 +1383,11 @@ def handle_support_store_draft(db: Session, task: AgentTask, step: AgentTaskStep
         reason = draft.get("escalation_reason") or f"Low confidence ({confidence:.2f})"
         escalate_thread(db, thread, reason)
 
-    # Update thread status
-    if not needs_escalation:
-        thread.status = "waiting_on_customer"
+    # Phase 3 is draft-only (human sends). Do NOT flip to waiting_on_customer
+    # here because the customer has not actually received a response yet.
+    # The thread stays open so it remains visible to SLA scanning and
+    # portfolio counts. Status transitions to waiting_on_customer will be
+    # added when the send step is implemented.
     thread.updated_at = datetime.now(timezone.utc)
     db.flush()
 
