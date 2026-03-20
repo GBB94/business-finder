@@ -17,6 +17,7 @@ from app.models.audit_log import AuditLog
 from app.models.daily_log import DailyLog
 from app.models.approval_grant import ApprovalGrant
 from app.models.project_metrics_daily import ProjectMetricsDaily
+from app.models.support_thread import SupportThread
 
 __all__ = [
     "User",
@@ -38,4 +39,5 @@ __all__ = [
     "DailyLog",
     "ApprovalGrant",
     "ProjectMetricsDaily",
+    "SupportThread",
 ]

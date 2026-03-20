@@ -175,6 +175,82 @@ def list_launches(
     )
 
 
+@router.get("/portfolio/metrics")
+def portfolio_metrics(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get latest metrics for all active launches (portfolio view)."""
+    launches = (
+        db.query(LaunchInstance)
+        .filter(
+            LaunchInstance.user_id == current_user.id,
+            LaunchInstance.status.in_(["active", "preview", "paused"]),
+        )
+        .all()
+    )
+
+    from sqlalchemy import func
+    from app.models.support_thread import SupportThread
+
+    result = []
+    for launch in launches:
+        idea = db.query(Idea).filter_by(id=launch.idea_id).first()
+
+        # Latest metrics row
+        latest = (
+            db.query(ProjectMetricsDaily)
+            .filter_by(launch_id=launch.id)
+            .order_by(ProjectMetricsDaily.date.desc())
+            .first()
+        )
+
+        # Support thread counts
+        open_threads = (
+            db.query(func.count(SupportThread.id))
+            .filter(
+                SupportThread.launch_id == launch.id,
+                SupportThread.status.in_(["open", "escalated"]),
+            )
+            .scalar()
+        ) or 0
+
+        escalated_threads = (
+            db.query(func.count(SupportThread.id))
+            .filter(
+                SupportThread.launch_id == launch.id,
+                SupportThread.status == "escalated",
+            )
+            .scalar()
+        ) or 0
+
+        result.append({
+            "launch_id": launch.id,
+            "idea_name": idea.name if idea else None,
+            "status": launch.status,
+            "daily_budget_cap": launch.daily_budget_cap,
+            "total_spend_to_date": launch.total_spend_to_date,
+            "created_at": launch.created_at.isoformat() if launch.created_at else None,
+            "preview_url": launch.preview_url,
+            "production_url": launch.production_url,
+            "latest_metrics": {
+                "date": latest.date.isoformat() if latest else None,
+                "signups": latest.signups if latest else 0,
+                "active_users": latest.active_users if latest else 0,
+                "activation_rate": latest.activation_rate if latest else None,
+                "revenue_cents": latest.revenue_cents if latest else 0,
+                "total_spend_cents": latest.total_spend_cents if latest else 0,
+                "error_count": latest.error_count if latest else 0,
+            } if latest else None,
+            "support": {
+                "open_threads": open_threads,
+                "escalated_threads": escalated_threads,
+            },
+        })
+
+    return {"items": result, "total": len(result)}
+
+
 @router.get("/{launch_id}", response_model=LaunchResponse)
 def get_launch(
     launch_id: str,
@@ -315,6 +391,7 @@ TRIGGERABLE_TASK_TYPES = {
     "scaffold", "deploy", "promote",
     "metrics_collection", "ceo_nightly",
     "send_cold_emails", "post_social", "write_content",
+    "triage_inbox", "draft_support_response", "check_escalations",
 }
 
 # Agent type assignment
@@ -327,6 +404,9 @@ _AGENT_TYPE_MAP: dict[str, str] = {
     "send_cold_emails": "marketing",
     "post_social": "marketing",
     "write_content": "marketing",
+    "triage_inbox": "support",
+    "draft_support_response": "support",
+    "check_escalations": "support",
 }
 
 

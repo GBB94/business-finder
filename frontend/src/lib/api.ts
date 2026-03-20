@@ -139,6 +139,77 @@ export function getAuditLog(
   );
 }
 
+// ── Portfolio / fund view ──────────────────────────────────────────────────
+
+export interface PortfolioItem {
+  launch_id: string;
+  idea_name: string | null;
+  status: string;
+  daily_budget_cap: number | null;
+  total_spend_to_date: number;
+  created_at: string | null;
+  preview_url: string | null;
+  production_url: string | null;
+  latest_metrics: {
+    date: string | null;
+    signups: number;
+    active_users: number;
+    activation_rate: number | null;
+    revenue_cents: number;
+    total_spend_cents: number;
+    error_count: number;
+  } | null;
+  support: {
+    open_threads: number;
+    escalated_threads: number;
+  };
+}
+
+export interface PortfolioResponse {
+  items: PortfolioItem[];
+  total: number;
+}
+
+export function getPortfolioMetrics(): Promise<PortfolioResponse> {
+  return apiFetch<PortfolioResponse>("/api/launches/portfolio/metrics");
+}
+
+// ── Support threads ───────────────────────────────────────────────────────
+
+import type { SupportThreadListResponse, SupportThread } from "./types";
+
+export function getSupportThreads(
+  launchId: string,
+  status?: string,
+  limit = 50,
+  offset = 0
+): Promise<SupportThreadListResponse> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (status) params.set("status", status);
+  return apiFetch<SupportThreadListResponse>(
+    `/api/launches/${launchId}/support-threads?${params}`
+  );
+}
+
+export function getSupportThread(
+  launchId: string,
+  threadId: string
+): Promise<SupportThread> {
+  return apiFetch<SupportThread>(
+    `/api/launches/${launchId}/support-threads/${threadId}`
+  );
+}
+
+export function resolveThread(
+  launchId: string,
+  threadId: string
+): Promise<SupportThread> {
+  return apiFetch<SupportThread>(
+    `/api/launches/${launchId}/support-threads/${threadId}/resolve`,
+    { method: "POST" }
+  );
+}
+
 // ── Task triggers ─────────────────────────────────────────────────────────
 
 import type { AgentTask, AgentTaskListResponse } from "./types";

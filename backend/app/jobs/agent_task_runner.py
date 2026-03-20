@@ -54,6 +54,9 @@ TASK_QUEUE_MAP: dict[str, str] = {
     "send_cold_emails": "marketing",
     "post_social": "marketing",
     "write_content": "marketing",
+    "triage_inbox": "support",
+    "draft_support_response": "support",
+    "check_escalations": "support",
 }
 
 def _queue_for_task(task_type: str) -> str:

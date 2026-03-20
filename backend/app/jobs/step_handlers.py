@@ -1168,6 +1168,344 @@ def handle_store_content(db: Session, task: AgentTask, step: AgentTaskStep, inpu
 
 
 # ---------------------------------------------------------------------------
+# Support: triage_inbox handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_support_parse_inbound(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Parse inbound email from task input_params and create/update thread."""
+    from app.services.support_agent import get_or_create_thread, add_message_to_thread
+
+    params = task.input_params or {}
+    customer_email = params.get("customer_email")
+    subject = params.get("subject", "")
+    body = params.get("body", "")
+    message_id = params.get("message_id")
+
+    if not customer_email or not body:
+        raise ValueError("triage_inbox requires customer_email and body in input_params")
+
+    thread = get_or_create_thread(db, task.launch_id, customer_email, subject)
+    add_message_to_thread(db, thread, "inbound", body, message_id)
+
+    return {
+        "thread_id": thread.id,
+        "customer_email": customer_email,
+        "subject": subject,
+        "body": body[:5000],
+        "message_count": thread.message_count,
+    }
+
+
+def handle_support_run_triage(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Run AI triage on the inbound email."""
+    from app.services.support_agent import triage_email
+
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "parse_inbound" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("parse_inbound step must complete first")
+
+    data = prev_step.output_data
+    idea = _get_idea(db, task)
+
+    result = asyncio.run(triage_email(
+        subject=data.get("subject", ""),
+        body=data.get("body", ""),
+        sender_email=data.get("customer_email", ""),
+        product_name=idea.name,
+        model=task.model_used,
+    ))
+
+    step.tokens_used = result["tokens_used"]
+
+    return {
+        "thread_id": data["thread_id"],
+        "triage": result["triage"],
+        "tokens_used": result["tokens_used"],
+        "model_version": result["model_version"],
+    }
+
+
+def handle_support_store_triage(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Store triage result, update thread, optionally extract feature request."""
+    from app.models.operational_event import OperationalEvent
+    from app.models.support_thread import SupportThread
+    from app.services.support_agent import extract_feature_request, CONFIDENCE_THRESHOLD
+
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "run_triage" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("run_triage step must complete first")
+
+    data = prev_step.output_data
+    triage = data.get("triage", {})
+    thread_id = data["thread_id"]
+
+    thread = db.query(SupportThread).filter_by(id=thread_id).first()
+    if thread:
+        thread.confidence_score = triage.get("confidence", 0.5)
+
+    # Create operational event for support_received
+    event = OperationalEvent(
+        launch_id=task.launch_id,
+        event_type="support_received",
+        payload={
+            "task_id": task.id,
+            "thread_id": thread_id,
+            "intent": triage.get("intent"),
+            "urgency": triage.get("urgency"),
+            "confidence": triage.get("confidence"),
+            "summary": triage.get("summary"),
+        },
+    )
+    db.add(event)
+    db.flush()
+
+    result = {
+        "event_id": event.id,
+        "thread_id": thread_id,
+        "intent": triage.get("intent"),
+        "urgency": triage.get("urgency"),
+        "confidence": triage.get("confidence"),
+    }
+
+    # Extract feature request if detected
+    if triage.get("is_feature_request") and thread:
+        from app.models.launch_instance import LaunchInstance
+        launch = db.query(LaunchInstance).filter_by(id=task.launch_id).first()
+        if launch:
+            evidence = extract_feature_request(
+                db, thread, launch,
+                triage.get("feature_description", triage.get("summary", "")),
+            )
+            result["feature_request_extracted"] = True
+            result["evidence_id"] = evidence.id
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Support: draft_support_response handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_support_load_thread(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Load thread history for response drafting."""
+    from app.models.support_thread import SupportThread
+
+    params = task.input_params or {}
+    thread_id = params.get("thread_id")
+    if not thread_id:
+        raise ValueError("draft_support_response requires thread_id in input_params")
+
+    thread = db.query(SupportThread).filter_by(id=thread_id).first()
+    if not thread:
+        raise ValueError(f"Thread {thread_id} not found")
+
+    return {
+        "thread_id": thread.id,
+        "customer_email": thread.customer_email,
+        "subject": thread.subject,
+        "messages": thread.messages or [],
+        "status": thread.status,
+        "message_count": thread.message_count,
+    }
+
+
+def handle_support_draft_response(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Draft a response using AI."""
+    from app.services.support_agent import draft_response
+
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "load_thread" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("load_thread step must complete first")
+
+    data = prev_step.output_data
+    idea = _get_idea(db, task)
+
+    result = asyncio.run(draft_response(
+        thread_messages=data.get("messages", []),
+        product_name=idea.name,
+        product_context=f"{idea.one_liner or ''}. Audience: {idea.audience or 'unknown'}",
+        model=task.model_used,
+    ))
+
+    step.tokens_used = result["tokens_used"]
+
+    return {
+        "thread_id": data["thread_id"],
+        "draft": result["draft"],
+        "tokens_used": result["tokens_used"],
+        "model_version": result["model_version"],
+    }
+
+
+def handle_support_store_draft(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Store the drafted response and update thread."""
+    from app.models.operational_event import OperationalEvent
+    from app.models.support_thread import SupportThread
+    from app.services.support_agent import add_message_to_thread, escalate_thread, CONFIDENCE_THRESHOLD
+
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "draft_response" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("draft_response step must complete first")
+
+    data = prev_step.output_data
+    draft = data.get("draft", {})
+    thread_id = data["thread_id"]
+
+    thread = db.query(SupportThread).filter_by(id=thread_id).first()
+    if not thread:
+        raise ValueError(f"Thread {thread_id} not found")
+
+    # Update thread confidence
+    confidence = draft.get("confidence", 0.5)
+    thread.confidence_score = confidence
+
+    # Store draft as outbound message (not sent yet, just drafted)
+    draft_body = draft.get("draft_response", "")
+    add_message_to_thread(db, thread, "outbound", f"[DRAFT] {draft_body}")
+
+    # Check if escalation needed
+    needs_escalation = draft.get("needs_escalation", False) or confidence < CONFIDENCE_THRESHOLD
+    if needs_escalation and thread.status != "escalated":
+        reason = draft.get("escalation_reason") or f"Low confidence ({confidence:.2f})"
+        escalate_thread(db, thread, reason)
+
+    # Update thread status
+    if not needs_escalation:
+        thread.status = "waiting_on_customer"
+    thread.updated_at = datetime.now(timezone.utc)
+    db.flush()
+
+    # Create operational event
+    event = OperationalEvent(
+        launch_id=task.launch_id,
+        event_type="support_responded",
+        payload={
+            "task_id": task.id,
+            "thread_id": thread_id,
+            "confidence": confidence,
+            "escalated": needs_escalation,
+            "draft_length": len(draft_body),
+            "internal_notes": draft.get("internal_notes"),
+        },
+    )
+    db.add(event)
+    db.flush()
+
+    return {
+        "event_id": event.id,
+        "thread_id": thread_id,
+        "confidence": confidence,
+        "escalated": needs_escalation,
+        "draft_stored": True,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Support: check_escalations handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_support_scan_threads(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Scan for threads that have breached the escalation SLA."""
+    from app.services.support_agent import check_escalation_sla
+
+    breached = check_escalation_sla(db, task.launch_id)
+    return {
+        "breached_thread_ids": [t.id for t in breached],
+        "breached_count": len(breached),
+        "threads": [
+            {
+                "id": t.id,
+                "customer_email": t.customer_email,
+                "subject": t.subject,
+                "message_count": t.message_count,
+                "created_at": t.created_at.isoformat() if t.created_at else None,
+            }
+            for t in breached
+        ],
+    }
+
+
+def handle_support_flag_breaches(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Flag breached threads as escalated."""
+    from app.models.support_thread import SupportThread
+    from app.services.support_agent import escalate_thread, ESCALATION_SLA_HOURS
+
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "scan_threads" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("scan_threads step must complete first")
+
+    data = prev_step.output_data
+    thread_ids = data.get("breached_thread_ids", [])
+    escalated = []
+
+    for tid in thread_ids:
+        thread = db.query(SupportThread).filter_by(id=tid).first()
+        if thread and thread.status != "escalated":
+            escalate_thread(db, thread, f"No response within {ESCALATION_SLA_HOURS}h SLA")
+            escalated.append(tid)
+
+    return {
+        "escalated_count": len(escalated),
+        "escalated_thread_ids": escalated,
+    }
+
+
+def handle_support_notify_founder(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Create operational events for escalated threads so the CEO agent picks them up."""
+    from app.models.operational_event import OperationalEvent
+
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "flag_breaches" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("flag_breaches step must complete first")
+
+    data = prev_step.output_data
+    escalated_ids = data.get("escalated_thread_ids", [])
+
+    if not escalated_ids:
+        return {"notified": False, "reason": "no_escalations"}
+
+    event = OperationalEvent(
+        launch_id=task.launch_id,
+        event_type="support_escalated",
+        payload={
+            "task_id": task.id,
+            "escalated_thread_ids": escalated_ids,
+            "escalated_count": len(escalated_ids),
+            "reason": "SLA breach",
+        },
+    )
+    db.add(event)
+    db.flush()
+
+    return {
+        "event_id": event.id,
+        "notified": True,
+        "escalated_count": len(escalated_ids),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -1229,4 +1567,16 @@ HANDLER_REGISTRY: dict[tuple[str, str], object] = {
     ("write_content", "check_budget"): handle_marketing_check_budget,
     ("write_content", "generate_content"): handle_generate_content,
     ("write_content", "store_content"): handle_store_content,
+    # Support: triage_inbox
+    ("triage_inbox", "parse_inbound"): handle_support_parse_inbound,
+    ("triage_inbox", "run_triage"): handle_support_run_triage,
+    ("triage_inbox", "store_triage"): handle_support_store_triage,
+    # Support: draft_support_response
+    ("draft_support_response", "load_thread"): handle_support_load_thread,
+    ("draft_support_response", "draft_response"): handle_support_draft_response,
+    ("draft_support_response", "store_draft"): handle_support_store_draft,
+    # Support: check_escalations
+    ("check_escalations", "scan_threads"): handle_support_scan_threads,
+    ("check_escalations", "flag_breaches"): handle_support_flag_breaches,
+    ("check_escalations", "notify_founder"): handle_support_notify_founder,
 }

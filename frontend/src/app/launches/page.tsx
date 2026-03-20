@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { apiFetch, createLaunch, getLaunches } from "@/lib/api";
+import { apiFetch, createLaunch, getLaunches, getPortfolioMetrics } from "@/lib/api";
 import type { LaunchInstance, LaunchListResponse, Idea, IdeaListResponse } from "@/lib/types";
+import type { PortfolioItem } from "@/lib/api";
 
 const STATUS_COLORS: Record<string, string> = {
   provisioning: "bg-yellow-900/50 text-yellow-400",
@@ -16,6 +17,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function LaunchesPage() {
   const router = useRouter();
   const [launches, setLaunches] = useState<LaunchInstance[]>([]);
+  const [portfolio, setPortfolio] = useState<PortfolioItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -26,8 +28,12 @@ export default function LaunchesPage() {
 
   const fetchLaunches = async () => {
     try {
-      const data = await getLaunches();
-      setLaunches(data.items);
+      const [launchData, portfolioData] = await Promise.all([
+        getLaunches(),
+        getPortfolioMetrics(),
+      ]);
+      setLaunches(launchData.items);
+      setPortfolio(portfolioData.items);
     } catch (err) {
       console.error("Failed to fetch launches:", err);
     } finally {
@@ -100,6 +106,48 @@ export default function LaunchesPage() {
         </button>
       </div>
 
+      {/* Portfolio summary */}
+      {portfolio.length > 0 && (
+        <div className="mb-6 grid grid-cols-4 gap-4">
+          <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
+            <p className="text-[10px] uppercase text-gray-600">Active Projects</p>
+            <p className="text-xl font-bold">
+              {portfolio.filter((p) => p.status === "active").length}
+            </p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
+            <p className="text-[10px] uppercase text-gray-600">Total Revenue</p>
+            <p className="text-xl font-bold">
+              {formatCurrency(
+                portfolio.reduce(
+                  (sum, p) => sum + (p.latest_metrics?.revenue_cents ?? 0) / 100,
+                  0
+                )
+              )}
+            </p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
+            <p className="text-[10px] uppercase text-gray-600">Total Spend</p>
+            <p className="text-xl font-bold">
+              {formatCurrency(
+                portfolio.reduce((sum, p) => sum + p.total_spend_to_date, 0)
+              )}
+            </p>
+          </div>
+          <div className="rounded-lg border border-gray-800 bg-gray-900 p-3">
+            <p className="text-[10px] uppercase text-gray-600">Open Support</p>
+            <p className="text-xl font-bold">
+              {portfolio.reduce((sum, p) => sum + p.support.open_threads, 0)}
+              {portfolio.some((p) => p.support.escalated_threads > 0) && (
+                <span className="ml-1 text-xs text-orange-400">
+                  ({portfolio.reduce((sum, p) => sum + p.support.escalated_threads, 0)} escalated)
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
       {launches.length === 0 ? (
         <div className="rounded-lg border border-gray-800 bg-gray-900 p-12 text-center">
           <p className="text-gray-500 mb-4">No launches yet.</p>
@@ -109,44 +157,81 @@ export default function LaunchesPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {launches.map((launch) => (
-            <button
-              key={launch.id}
-              onClick={() => router.push(`/launches/${launch.id}`)}
-              className="w-full text-left rounded-lg border border-gray-800 bg-gray-900 p-4 hover:border-gray-700 transition-colors"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <h3 className="font-medium text-gray-200">
-                    {launch.idea_name ?? "Unnamed Idea"}
-                  </h3>
-                  <span
-                    className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${
-                      STATUS_COLORS[launch.status] ?? "bg-gray-700 text-gray-400"
-                    }`}
-                  >
-                    {launch.status}
+          {launches.map((launch) => {
+            const pm = portfolio.find((p) => p.launch_id === launch.id);
+            return (
+              <button
+                key={launch.id}
+                onClick={() => router.push(`/launches/${launch.id}`)}
+                className="w-full text-left rounded-lg border border-gray-800 bg-gray-900 p-4 hover:border-gray-700 transition-colors"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <h3 className="font-medium text-gray-200">
+                      {launch.idea_name ?? "Unnamed Idea"}
+                    </h3>
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-medium uppercase ${
+                        STATUS_COLORS[launch.status] ?? "bg-gray-700 text-gray-400"
+                      }`}
+                    >
+                      {launch.status}
+                    </span>
+                    {pm && pm.support.escalated_threads > 0 && (
+                      <span className="rounded bg-orange-900/50 px-2 py-0.5 text-[10px] font-medium text-orange-400">
+                        {pm.support.escalated_threads} escalated
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-xs text-gray-600">
+                    {formatDate(launch.created_at)}
                   </span>
                 </div>
-                <span className="text-xs text-gray-600">
-                  {formatDate(launch.created_at)}
-                </span>
-              </div>
 
-              <div className="mt-3 flex items-center gap-6 text-xs text-gray-500">
-                {launch.preview_url && (
-                  <span>Preview: {launch.preview_url}</span>
+                {pm?.latest_metrics ? (
+                  <div className="mt-3 grid grid-cols-6 gap-4 text-xs">
+                    <div>
+                      <span className="text-gray-600">Users</span>
+                      <p className="text-gray-300 font-medium">{pm.latest_metrics.active_users}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Revenue</span>
+                      <p className="text-gray-300 font-medium">{formatCurrency(pm.latest_metrics.revenue_cents / 100)}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Spend</span>
+                      <p className="text-gray-300 font-medium">{formatCurrency(launch.total_spend_to_date)}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Errors</span>
+                      <p className={`font-medium ${pm.latest_metrics.error_count > 0 ? "text-red-400" : "text-gray-300"}`}>
+                        {pm.latest_metrics.error_count}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Support</span>
+                      <p className="text-gray-300 font-medium">{pm.support.open_threads} open</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Budget</span>
+                      <p className="text-gray-300 font-medium">
+                        {launch.daily_budget_cap != null
+                          ? `${formatCurrency(launch.daily_budget_cap)}/d`
+                          : "No cap"}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex items-center gap-6 text-xs text-gray-500">
+                    <span>Spend: {formatCurrency(launch.total_spend_to_date)}</span>
+                    {launch.daily_budget_cap != null && (
+                      <span>Budget cap: {formatCurrency(launch.daily_budget_cap)}/day</span>
+                    )}
+                  </div>
                 )}
-                {launch.production_url && (
-                  <span>Production: {launch.production_url}</span>
-                )}
-                <span>Spend: {formatCurrency(launch.total_spend_to_date)}</span>
-                {launch.daily_budget_cap != null && (
-                  <span>Budget cap: {formatCurrency(launch.daily_budget_cap)}/day</span>
-                )}
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
         </div>
       )}
 

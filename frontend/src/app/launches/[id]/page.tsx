@@ -15,6 +15,8 @@ import {
   rejectTask,
   triggerTask,
   getLaunchTasks,
+  getSupportThreads,
+  resolveThread,
 } from "@/lib/api";
 import type {
   LaunchInstance,
@@ -24,9 +26,10 @@ import type {
   AuditLogEntry,
   PendingApproval,
   AgentTask,
+  SupportThread,
 } from "@/lib/types";
 
-const TABS = ["Overview", "Events", "Daily Logs", "Approvals", "Audit Log"] as const;
+const TABS = ["Overview", "Support", "Events", "Daily Logs", "Approvals", "Audit Log"] as const;
 type Tab = (typeof TABS)[number];
 
 const STATUS_COLORS: Record<string, string> = {
@@ -54,6 +57,9 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   cold_email_drafted: "text-emerald-400",
   social_post_drafted: "text-cyan-400",
   content_generated: "text-pink-400",
+  support_escalated: "text-orange-400",
+  feature_request_extracted: "text-violet-400",
+  email_received: "text-teal-400",
 };
 
 export default function LaunchDetailPage() {
@@ -72,6 +78,9 @@ export default function LaunchDetailPage() {
   const [auditTotal, setAuditTotal] = useState(0);
   const [approvals, setApprovals] = useState<PendingApproval[]>([]);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
+  const [supportThreads, setSupportThreads] = useState<SupportThread[]>([]);
+  const [supportTotal, setSupportTotal] = useState(0);
+  const [supportFilter, setSupportFilter] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [triggerLoading, setTriggerLoading] = useState<string | null>(null);
 
@@ -141,6 +150,16 @@ export default function LaunchDetailPage() {
     }
   }, [launchId]);
 
+  const fetchSupportThreads = useCallback(async () => {
+    try {
+      const data = await getSupportThreads(launchId, supportFilter || undefined);
+      setSupportThreads(data.items);
+      setSupportTotal(data.total);
+    } catch (err) {
+      console.error("Failed to fetch support threads:", err);
+    }
+  }, [launchId, supportFilter]);
+
   useEffect(() => {
     fetchLaunch();
   }, [fetchLaunch]);
@@ -151,7 +170,8 @@ export default function LaunchDetailPage() {
     if (activeTab === "Daily Logs") fetchDailyLogs();
     if (activeTab === "Audit Log") fetchAuditLog();
     if (activeTab === "Approvals") fetchApprovals();
-  }, [activeTab, fetchEvents, fetchMetrics, fetchTasks, fetchDailyLogs, fetchAuditLog, fetchApprovals]);
+    if (activeTab === "Support") fetchSupportThreads();
+  }, [activeTab, fetchEvents, fetchMetrics, fetchTasks, fetchDailyLogs, fetchAuditLog, fetchApprovals, fetchSupportThreads]);
 
   const handleStatusChange = async (newStatus: string) => {
     if (!launch) return;
@@ -225,6 +245,16 @@ export default function LaunchDetailPage() {
     } catch (err) {
       console.error("Approve failed:", err);
       window.alert(`Approval failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+
+  const handleResolveThread = async (threadId: string) => {
+    if (!window.confirm("Resolve this support thread?")) return;
+    try {
+      await resolveThread(launchId, threadId);
+      fetchSupportThreads();
+    } catch (err) {
+      console.error("Resolve failed:", err);
     }
   };
 
@@ -484,6 +514,7 @@ export default function LaunchDetailPage() {
                   { type: "send_cold_emails", label: "Draft Cold Emails", color: "bg-emerald-700 hover:bg-emerald-600" },
                   { type: "post_social", label: "Draft Social Post", color: "bg-cyan-700 hover:bg-cyan-600" },
                   { type: "write_content", label: "Generate Content", color: "bg-pink-700 hover:bg-pink-600" },
+                  { type: "check_escalations", label: "Check Escalations", color: "bg-orange-700 hover:bg-orange-600" },
                 ].map(({ type, label, color }) => (
                   <button
                     key={type}
@@ -547,6 +578,146 @@ export default function LaunchDetailPage() {
         </div>
       )}
 
+      {activeTab === "Support" && (
+        <div className="max-w-3xl space-y-4">
+          <div className="flex items-center gap-3">
+            <select
+              value={supportFilter}
+              onChange={(e) => setSupportFilter(e.target.value)}
+              className="rounded bg-gray-800 px-3 py-1.5 text-xs text-gray-300 outline-none"
+            >
+              <option value="">All threads</option>
+              <option value="open">Open</option>
+              <option value="escalated">Escalated</option>
+              <option value="waiting_on_customer">Waiting on customer</option>
+              <option value="resolved">Resolved</option>
+            </select>
+            <span className="text-xs text-gray-600">{supportTotal} threads</span>
+          </div>
+
+          {supportThreads.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-600">
+              No support threads yet. Threads are created when inbound emails arrive.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {supportThreads.map((thread) => (
+                <div
+                  key={thread.id}
+                  className={`rounded-lg border p-4 ${
+                    thread.status === "escalated"
+                      ? "border-orange-800/50 bg-orange-950/10"
+                      : thread.status === "resolved"
+                      ? "border-gray-800 bg-gray-900/50"
+                      : "border-gray-800 bg-gray-900"
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-gray-200">
+                        {thread.subject || "No subject"}
+                      </span>
+                      <span
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
+                          thread.status === "escalated"
+                            ? "bg-orange-900/50 text-orange-400"
+                            : thread.status === "open"
+                            ? "bg-blue-900/50 text-blue-400"
+                            : thread.status === "resolved"
+                            ? "bg-green-900/50 text-green-400"
+                            : "bg-gray-700 text-gray-400"
+                        }`}
+                      >
+                        {thread.status}
+                      </span>
+                      {thread.feature_request_extracted && (
+                        <span className="rounded bg-violet-900/30 px-1.5 py-0.5 text-[10px] text-violet-400">
+                          Feature request
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-gray-600">
+                      {formatDateTime(thread.created_at)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-4 text-xs text-gray-500 mb-2">
+                    <span>{thread.customer_email}</span>
+                    <span>{thread.message_count} messages</span>
+                    {thread.confidence_score != null && (
+                      <span>
+                        Confidence:{" "}
+                        <span
+                          className={
+                            thread.confidence_score >= 0.7
+                              ? "text-green-400"
+                              : thread.confidence_score >= 0.4
+                              ? "text-yellow-400"
+                              : "text-red-400"
+                          }
+                        >
+                          {(thread.confidence_score * 100).toFixed(0)}%
+                        </span>
+                      </span>
+                    )}
+                  </div>
+
+                  {thread.escalation_reason && (
+                    <div className="rounded bg-orange-950/20 border border-orange-900/30 p-2 mb-2">
+                      <p className="text-xs text-orange-400">{thread.escalation_reason}</p>
+                    </div>
+                  )}
+
+                  {/* Show last 2 messages */}
+                  {thread.messages.length > 0 && (
+                    <div className="space-y-1 mt-2">
+                      {thread.messages.slice(-2).map((msg, i) => (
+                        <div
+                          key={i}
+                          className={`rounded px-2 py-1.5 text-xs ${
+                            msg.direction === "inbound"
+                              ? "bg-gray-800 text-gray-400"
+                              : "bg-indigo-950/20 text-gray-400"
+                          }`}
+                        >
+                          <span className="text-[10px] font-medium text-gray-600 uppercase">
+                            {msg.direction === "inbound" ? "Customer" : "Draft"}
+                          </span>
+                          <p className="mt-0.5 whitespace-pre-wrap break-all">
+                            {msg.body.slice(0, 300)}
+                            {msg.body.length > 300 ? "..." : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {thread.status !== "resolved" && (
+                    <div className="flex gap-2 mt-3">
+                      <button
+                        onClick={() =>
+                          handleTrigger("draft_support_response")
+                        }
+                        disabled={triggerLoading !== null}
+                        className="rounded bg-indigo-700 px-3 py-1 text-[11px] font-medium text-white hover:bg-indigo-600 disabled:opacity-40 transition-colors"
+                      >
+                        Draft Response
+                      </button>
+                      <button
+                        onClick={() => handleResolveThread(thread.id)}
+                        className="rounded bg-green-800 px-3 py-1 text-[11px] font-medium text-white hover:bg-green-700 transition-colors"
+                      >
+                        Resolve
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === "Events" && (
         <div className="max-w-3xl space-y-4">
           <div className="flex items-center gap-3">
@@ -564,6 +735,7 @@ export default function LaunchDetailPage() {
                 "error", "error_spike",
                 "metric_update", "service_suspended",
                 "cold_email_drafted", "social_post_drafted", "content_generated",
+                "email_received", "support_escalated", "feature_request_extracted",
               ].map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}

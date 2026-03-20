@@ -30,3 +30,4 @@ class LaunchInstance(Base):
     daily_logs = relationship("DailyLog", back_populates="launch_instance", cascade="all, delete-orphan")
     approval_grants = relationship("ApprovalGrant", back_populates="launch_instance", cascade="all, delete-orphan")
     project_metrics_daily = relationship("ProjectMetricsDaily", back_populates="launch_instance", cascade="all, delete-orphan")
+    support_threads = relationship("SupportThread", back_populates="launch_instance", cascade="all, delete-orphan")

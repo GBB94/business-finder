@@ -171,6 +171,31 @@ def build_ceo_context(db: Session, launch_id: str) -> dict:
         for t in pending_tasks
     ]
 
+    # Support thread summary
+    from app.models.support_thread import SupportThread
+    open_threads = (
+        db.query(SupportThread)
+        .filter(
+            SupportThread.launch_id == launch_id,
+            SupportThread.status.in_(["open", "escalated"]),
+        )
+        .all()
+    )
+    support_summary = {
+        "open_count": sum(1 for t in open_threads if t.status == "open"),
+        "escalated_count": sum(1 for t in open_threads if t.status == "escalated"),
+        "escalated_threads": [
+            {
+                "thread_id": t.id,
+                "customer_email": t.customer_email,
+                "subject": t.subject,
+                "escalation_reason": t.escalation_reason,
+                "message_count": t.message_count,
+            }
+            for t in open_threads if t.status == "escalated"
+        ],
+    }
+
     return {
         "launch_id": launch_id,
         "launch_status": launch.status,
@@ -192,6 +217,7 @@ def build_ceo_context(db: Session, launch_id: str) -> dict:
         "recent_events": events_list,
         "completed_tasks": completed_list,
         "pending_approvals": pending_list,
+        "support_summary": support_summary,
     }
 
 

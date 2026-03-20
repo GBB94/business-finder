@@ -434,6 +434,31 @@ export interface ApprovalGrantListResponse {
   total: number;
 }
 
+// Support types
+export type SupportThreadStatus = "open" | "waiting_on_customer" | "escalated" | "resolved";
+
+export interface SupportThread {
+  id: string;
+  launch_id: string;
+  customer_email: string;
+  subject: string | null;
+  status: SupportThreadStatus;
+  messages: { direction: string; body: string; timestamp: string; message_id?: string }[];
+  confidence_score: number | null;
+  escalated_at: string | null;
+  escalation_reason: string | null;
+  feature_request_extracted: boolean;
+  evidence_id: string | null;
+  message_count: number;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface SupportThreadListResponse {
+  items: SupportThread[];
+  total: number;
+}
+
 // Agent Task types
 export type AgentTaskStatus =
   | "queued"

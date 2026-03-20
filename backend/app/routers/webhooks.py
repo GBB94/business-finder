@@ -15,6 +15,7 @@ import hmac
 import logging
 import time
 
+import redis
 from fastapi import APIRouter, Header, HTTPException, Request, Depends
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -63,6 +64,7 @@ _RESEND_EVENT_MAP: dict[str, str] = {
     "email.bounced": "email_bounced",
     "email.complained": "email_bounced",  # treat complaints like bounces
     "email.delivered": "email_sent",
+    "email.received": "email_received",  # inbound email for support triage
 }
 
 
@@ -195,6 +197,38 @@ async def resend_webhook(
         return {"status": "duplicate", "event_id": None}
 
     logger.info("Created %s event for launch=%s from Resend webhook", mapped_type, launch_id)
+
+    # For inbound emails, trigger a support triage task
+    if mapped_type == "email_received":
+        try:
+            from app.services.agent_task_service import create_task
+            from app.jobs.agent_task_runner import _queue_for_task
+            from rq import Queue as RqQueue
+
+            task = create_task(
+                db,
+                idea_id=launch.idea_id,
+                user_id=launch.user_id,
+                task_type="triage_inbox",
+                input_params={
+                    "customer_email": data.get("from") or data.get("sender") or "",
+                    "subject": data.get("subject") or "",
+                    "body": data.get("text") or data.get("html") or data.get("body") or "",
+                    "message_id": data.get("id") or data.get("message_id") or "",
+                },
+            )
+            task.launch_id = launch_id
+            task.agent_type = "support"
+            db.commit()
+            db.refresh(task)
+
+            conn = redis.from_url(settings.REDIS_URL)
+            q = RqQueue(_queue_for_task("triage_inbox"), connection=conn)
+            q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
+            logger.info("Triggered triage_inbox task %s for inbound email", task.id)
+        except Exception:
+            logger.exception("Failed to trigger triage_inbox for inbound email on launch=%s", launch_id)
+
     return {"status": "processed", "event_type": mapped_type, "event_id": event.id}
 
 

@@ -31,6 +31,10 @@ MODEL_TIERS: dict[str, str] = {
     "send_cold_emails": "haiku",
     "post_social": "haiku",
     "write_content": "sonnet",
+    # Support: triage on Haiku, response drafting on Haiku (cheap, high volume)
+    "triage_inbox": "haiku",
+    "draft_support_response": "haiku",
+    "check_escalations": "haiku",
 }
 
 
@@ -63,6 +67,10 @@ DEFAULT_TOKEN_BUDGETS: dict[str, int] = {
     "send_cold_emails": 30_000,
     "post_social": 15_000,
     "write_content": 60_000,
+    # Support
+    "triage_inbox": 15_000,
+    "draft_support_response": 20_000,
+    "check_escalations": 5_000,
 }
 
 
@@ -85,6 +93,10 @@ DEFAULT_STEPS: dict[str, list[str]] = {
     "send_cold_emails": ["check_budget", "generate_drafts", "store_drafts"],
     "post_social": ["check_budget", "generate_post", "store_post"],
     "write_content": ["check_budget", "generate_content", "store_content"],
+    # Support tasks
+    "triage_inbox": ["parse_inbound", "run_triage", "store_triage"],
+    "draft_support_response": ["load_thread", "draft_response", "store_draft"],
+    "check_escalations": ["scan_threads", "flag_breaches", "notify_founder"],
 }
 
 VALID_TASK_TYPES: set[str] = set(DEFAULT_STEPS.keys())
