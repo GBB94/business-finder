@@ -199,6 +199,11 @@ def get_or_create_thread(
         .first()
     )
     if thread:
+        # Reopen threads where the customer is replying to a waiting conversation
+        if thread.status == "waiting_on_customer":
+            thread.status = "open"
+            thread.updated_at = datetime.now(timezone.utc)
+            db.flush()
         return thread
 
     thread = SupportThread(

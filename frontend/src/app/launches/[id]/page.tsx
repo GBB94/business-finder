@@ -695,13 +695,27 @@ export default function LaunchDetailPage() {
                   {thread.status !== "resolved" && (
                     <div className="flex gap-2 mt-3">
                       <button
-                        onClick={() =>
-                          handleTrigger("draft_support_response")
-                        }
+                        onClick={async () => {
+                          if (!window.confirm("Draft a response for this thread?")) return;
+                          setTriggerLoading("draft_support_response");
+                          try {
+                            await triggerTask(launchId, "draft_support_response", {
+                              thread_id: thread.id,
+                            });
+                            fetchSupportThreads();
+                          } catch (err) {
+                            console.error("Draft trigger failed:", err);
+                            window.alert(
+                              `Draft failed: ${err instanceof Error ? err.message : String(err)}`
+                            );
+                          } finally {
+                            setTriggerLoading(null);
+                          }
+                        }}
                         disabled={triggerLoading !== null}
                         className="rounded bg-indigo-700 px-3 py-1 text-[11px] font-medium text-white hover:bg-indigo-600 disabled:opacity-40 transition-colors"
                       >
-                        Draft Response
+                        {triggerLoading === "draft_support_response" ? "..." : "Draft Response"}
                       </button>
                       <button
                         onClick={() => handleResolveThread(thread.id)}
