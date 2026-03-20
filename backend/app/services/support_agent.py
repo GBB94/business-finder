@@ -244,7 +244,8 @@ def check_escalation_sla(db: Session, launch_id: str) -> list[SupportThread]:
     """Find threads that have breached the 4-hour escalation SLA.
 
     Returns threads that are open, have at least one inbound message,
-    and have not received a response within ESCALATION_SLA_HOURS.
+    and the last inbound message is older than ESCALATION_SLA_HOURS.
+    Uses the timestamp of the latest inbound message, not thread creation.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=ESCALATION_SLA_HOURS)
 
@@ -253,7 +254,6 @@ def check_escalation_sla(db: Session, launch_id: str) -> list[SupportThread]:
         .filter(
             SupportThread.launch_id == launch_id,
             SupportThread.status == "open",
-            SupportThread.created_at <= cutoff,
             SupportThread.escalated_at.is_(None),
         )
         .all()
@@ -266,7 +266,17 @@ def check_escalation_sla(db: Session, launch_id: str) -> list[SupportThread]:
             continue
         # Check if last message is inbound (customer waiting)
         last_msg = messages[-1]
-        if last_msg.get("direction") == "inbound":
+        if last_msg.get("direction") != "inbound":
+            continue
+        # Use the timestamp of the last inbound message for SLA check
+        msg_ts = last_msg.get("timestamp")
+        if not msg_ts:
+            continue
+        try:
+            msg_time = datetime.fromisoformat(msg_ts)
+        except (ValueError, TypeError):
+            continue
+        if msg_time <= cutoff:
             sla_breached.append(thread)
 
     return sla_breached

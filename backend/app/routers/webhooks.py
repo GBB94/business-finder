@@ -198,44 +198,42 @@ async def resend_webhook(
 
     logger.info("Created %s event for launch=%s from Resend webhook", mapped_type, launch_id)
 
-    # For inbound emails, create a triage task atomically.
-    # The task is committed to the DB first so that even if Redis enqueue
-    # fails, the task persists in "queued" status and can be picked up
-    # by the next worker poll or manual retry.
+    # For inbound emails, create and enqueue a triage task.
+    # Both DB commit and Redis enqueue must succeed. If either fails,
+    # we return 503 so the webhook provider retries the whole delivery.
     if mapped_type == "email_received":
         from app.services.agent_task_service import create_task
         from app.jobs.agent_task_runner import _queue_for_task
         from rq import Queue as RqQueue
 
-        task = create_task(
-            db,
-            idea_id=launch.idea_id,
-            user_id=launch.user_id,
-            task_type="triage_inbox",
-            input_params={
-                "customer_email": data.get("from") or data.get("sender") or "",
-                "subject": data.get("subject") or "",
-                "body": data.get("text") or data.get("html") or data.get("body") or "",
-                "message_id": data.get("id") or data.get("message_id") or "",
-            },
-        )
-        task.launch_id = launch_id
-        task.agent_type = "support"
-        db.commit()
-        db.refresh(task)
-
-        # Best-effort enqueue. Task is already persisted in "queued" status,
-        # so even if this fails the task will not be lost.
         try:
+            task = create_task(
+                db,
+                idea_id=launch.idea_id,
+                user_id=launch.user_id,
+                task_type="triage_inbox",
+                input_params={
+                    "customer_email": data.get("from") or data.get("sender") or "",
+                    "subject": data.get("subject") or "",
+                    "body": data.get("text") or data.get("html") or data.get("body") or "",
+                    "message_id": data.get("id") or data.get("message_id") or "",
+                },
+            )
+            # Set launch_id and agent_type before committing so they
+            # are part of the same transaction as the task creation.
+            task.launch_id = launch_id
+            task.agent_type = "support"
+            db.commit()
+            db.refresh(task)
+
             conn = redis.from_url(settings.REDIS_URL)
             q = RqQueue(_queue_for_task("triage_inbox"), connection=conn)
             q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
             logger.info("Triggered triage_inbox task %s for inbound email", task.id)
         except Exception:
-            logger.exception(
-                "Failed to enqueue triage_inbox task %s (task persisted in DB, will be picked up on next poll)",
-                task.id,
-            )
+            db.rollback()
+            logger.exception("Failed to create/enqueue triage_inbox for launch=%s", launch_id)
+            raise HTTPException(503, "Failed to enqueue support triage task")
 
     return {"status": "processed", "event_type": mapped_type, "event_id": event.id}
 

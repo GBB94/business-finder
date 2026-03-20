@@ -1391,10 +1391,13 @@ def handle_support_store_draft(db: Session, task: AgentTask, step: AgentTaskStep
     thread.updated_at = datetime.now(timezone.utc)
     db.flush()
 
-    # Create operational event
+    # Create operational event. Use "support_draft_created" (not
+    # "support_responded") because Phase 3 is draft-only. The customer
+    # has not received anything yet. "support_responded" should only be
+    # emitted when a response is actually sent (future send step).
     event = OperationalEvent(
         launch_id=task.launch_id,
-        event_type="support_responded",
+        event_type="support_draft_created",
         payload={
             "task_id": task.id,
             "thread_id": thread_id,

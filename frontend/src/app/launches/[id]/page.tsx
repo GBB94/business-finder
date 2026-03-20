@@ -58,6 +58,7 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
   social_post_drafted: "text-cyan-400",
   content_generated: "text-pink-400",
   support_escalated: "text-orange-400",
+  support_draft_created: "text-sky-400",
   feature_request_extracted: "text-violet-400",
   email_received: "text-teal-400",
 };
@@ -749,7 +750,7 @@ export default function LaunchDetailPage() {
                 "error", "error_spike",
                 "metric_update", "service_suspended",
                 "cold_email_drafted", "social_post_drafted", "content_generated",
-                "email_received", "support_escalated", "feature_request_extracted",
+                "email_received", "support_escalated", "support_draft_created", "feature_request_extracted",
               ].map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
