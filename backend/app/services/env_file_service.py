@@ -72,6 +72,13 @@ def write_env_file(launch_id: str, environment: str, env_vars: dict) -> str:
         raise
 
     logger.info("Wrote env file for launch=%s env=%s keys=%d", launch_id, environment, len(env_vars))
+
+    # Create encrypted backup after every write
+    try:
+        backup_env_file(launch_id, environment)
+    except Exception:
+        logger.exception("Failed to create encrypted backup for launch=%s env=%s", launch_id, environment)
+
     return str(file_path)
 
 
@@ -171,6 +178,77 @@ def resolve_credentials(environment: str) -> dict[str, str]:
         }
     else:
         raise ValueError(f"Unknown environment: {environment}")
+
+
+BACKUP_DIR = ENVFILES_DIR / "backups"
+
+
+def backup_env_file(launch_id: str, environment: str) -> str | None:
+    """Create an encrypted backup of a project env file.
+
+    Uses SECRETS_MASTER_KEY (Fernet) for encryption. Backups are stored
+    alongside env files in a backups/ subdirectory with a timestamp
+    suffix. Returns the backup path, or None if the source file doesn't
+    exist or encryption is not configured.
+    """
+    from app.config import settings
+
+    _validate_environment(environment)
+
+    src = Path(get_env_file_path(launch_id, environment))
+    if not src.exists():
+        logger.warning("Cannot backup non-existent env file: %s", src)
+        return None
+
+    if not settings.SECRETS_MASTER_KEY:
+        logger.warning("SECRETS_MASTER_KEY not configured, skipping encrypted backup")
+        return None
+
+    from cryptography.fernet import Fernet
+
+    fernet = Fernet(settings.SECRETS_MASTER_KEY.encode())
+    plaintext = src.read_bytes()
+    ciphertext = fernet.encrypt(plaintext)
+
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = BACKUP_DIR / f".env.project-{launch_id}.{environment}.{ts}.enc"
+    backup_path.write_bytes(ciphertext)
+    os.chmod(backup_path, 0o600)
+
+    logger.info("Encrypted backup created: %s", backup_path)
+    return str(backup_path)
+
+
+def backup_all_env_files() -> list[str]:
+    """Create encrypted backups of all env files. Returns list of backup paths."""
+    backed_up: list[str] = []
+    if not ENVFILES_DIR.exists():
+        return backed_up
+
+    for f in ENVFILES_DIR.glob(".env.project-*"):
+        if f.suffix == ".tmp" or f.name.endswith(".enc"):
+            continue
+        # Parse launch_id and environment from filename
+        # Format: .env.project-{launch_id}.{environment}
+        parts = f.name.split(".")
+        if len(parts) < 4:
+            continue
+        environment = parts[-1]
+        if environment not in VALID_ENVIRONMENTS:
+            continue
+        # Extract launch_id: everything between "project-" and the last dot
+        prefix = "env.project-"
+        name_without_dot = ".".join(parts[1:])  # remove leading dot
+        if not name_without_dot.startswith(prefix):
+            continue
+        launch_id = name_without_dot[len(prefix):-(len(environment) + 1)]
+
+        path = backup_env_file(launch_id, environment)
+        if path:
+            backed_up.append(path)
+
+    return backed_up
 
 
 def delete_env_file(launch_id: str, environment: str) -> bool:

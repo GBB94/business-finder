@@ -81,6 +81,11 @@ def check_error_spike(db: Session, launch_id: str) -> OperationalEvent | None:
         settings.ERROR_SPIKE_WINDOW_MINUTES,
         settings.ERROR_SPIKE_THRESHOLD,
     )
+
+    # Trigger immediate CEO evaluation for error spikes
+    from app.services.interrupt_emitter import trigger_and_enqueue
+    trigger_and_enqueue(db, launch_id, "error_spike")
+
     return event
 
 

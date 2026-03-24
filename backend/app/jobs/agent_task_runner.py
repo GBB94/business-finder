@@ -217,9 +217,32 @@ def run_agent_task(task_id: str) -> None:
 
         task = start_task(db, task)
 
-        # --- Approve-once gate check ---
-        # For approve-once task types, check for a standing grant.
-        # If no grant exists and no explicit approval, pause for approval.
+        # --- Always-approve gate ---
+        # These task types always require explicit approval. Grants are
+        # never checked because the spec mandates human confirmation
+        # every time (e.g., production promotions, refund processing).
+        if task.task_type in ALWAYS_APPROVE_TYPES and task.approval_status != "approved":
+            from app.services.approval_service import create_approval_request
+            from app.jobs.step_handlers import _send_approval_notification
+
+            artifact_id = (task.input_params or {}).get(
+                "commit_sha"
+            ) or (task.input_params or {}).get("artifact_id")
+            raw_token = create_approval_request(db, task, artifact_id=artifact_id)
+            task.status = "waiting_for_approval"
+            db.commit()
+
+            _send_approval_notification(db, task, raw_token, artifact_id)
+            logger.info(
+                "Task %s (%s) always requires approval, pausing",
+                task_id, task.task_type,
+            )
+            return
+
+        # --- Approve-once gate ---
+        # Check for a standing grant. If one exists, auto-approve.
+        # If not, pause for explicit approval and create a grant on
+        # first approval so subsequent tasks auto-execute.
         if task.task_type in APPROVE_ONCE_TYPES and task.approval_status != "approved":
             if task.launch_id:
                 from app.services.approval_service import check_grant, create_approval_request
@@ -232,13 +255,17 @@ def run_agent_task(task_id: str) -> None:
                     )
                 else:
                     # No grant, no approval. Create approval request and pause.
-                    raw_token = create_approval_request(db, task)
+                    # Bind to artifact if available (e.g. commit SHA for deploys)
+                    artifact_id = (task.input_params or {}).get(
+                        "commit_sha"
+                    ) or (task.input_params or {}).get("artifact_id")
+                    raw_token = create_approval_request(db, task, artifact_id=artifact_id)
                     task.status = "waiting_for_approval"
                     db.commit()
 
-                    # Deliver the raw token via email only (never persisted in DB)
+                    # Deliver the raw token via email + cache in Redis
                     from app.jobs.step_handlers import _send_approval_notification
-                    _send_approval_notification(db, task, raw_token)
+                    _send_approval_notification(db, task, raw_token, artifact_id)
                     logger.info(
                         "Task %s (%s) requires approve-once approval, pausing",
                         task_id, task.task_type,

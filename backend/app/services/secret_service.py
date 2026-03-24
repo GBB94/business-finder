@@ -1,11 +1,16 @@
 """Per-project secret encryption and retrieval."""
 from __future__ import annotations
 
+import logging
+
 from cryptography.fernet import Fernet
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.audit_log import AuditLog
 from app.models.project_secret import ProjectSecret
+
+logger = logging.getLogger(__name__)
 
 
 def _get_fernet() -> Fernet:
@@ -28,6 +33,9 @@ def get_secrets_for_task(
     idea_id: str,
     user_id: str,
     environment: str = "preview",
+    *,
+    actor: str = "system",
+    task_id: str | None = None,
 ) -> dict[str, str]:
     """Load and decrypt all secrets for a task execution context."""
     secrets = (
@@ -35,4 +43,20 @@ def get_secrets_for_task(
         .filter_by(idea_id=idea_id, user_id=user_id, environment=environment)
         .all()
     )
-    return {s.key_name: decrypt_value(s.encrypted_value) for s in secrets}
+    result = {s.key_name: decrypt_value(s.encrypted_value) for s in secrets}
+
+    if result:
+        db.add(AuditLog(
+            actor=actor,
+            action="secret_accessed",
+            resource_type="project_secret",
+            details={
+                "idea_id": idea_id,
+                "environment": environment,
+                "keys_read": list(result.keys()),
+                "task_id": task_id,
+            },
+        ))
+        db.flush()
+
+    return result

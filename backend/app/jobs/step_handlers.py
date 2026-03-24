@@ -763,32 +763,26 @@ def _send_approval_notification(
 def handle_promote_check(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
     """Check approval status before promoting.
 
-    If not yet approved, creates an approval request and raises
-    ApprovalRequired so the runner pauses the task.
+    Promote is an always-approve task type. The pre-execution gate in
+    the task runner already pauses and creates an approval request
+    before any steps run. This handler is a safety check: if the task
+    somehow reached this step without approval, it raises
+    ApprovalRequired. Grants are never checked because promote must
+    always require explicit human confirmation.
     """
-    from app.services.approval_service import check_grant, create_approval_request
+    from app.services.approval_service import create_approval_request
 
-    # Already explicitly approved
     if task.approval_status == "approved":
         return {"approved": True, "method": "explicit_approval"}
 
-    # Check for a standing grant
-    grant = check_grant(db, task.launch_id, "promote")
-    if grant:
-        task.approval_status = "approved"
-        db.flush()
-        return {"approved": True, "method": "standing_grant", "grant_id": grant.id}
-
-    # No approval and no grant: create an approval request and pause
+    # Should not reach here (pre-execution gate handles it), but
+    # defend in depth: create an approval request and pause.
     artifact_id = (task.input_params or {}).get("commit_sha")
     raw_token = create_approval_request(db, task, artifact_id=artifact_id)
-
-    # Send the raw token via email only. Never persist raw tokens in the DB
-    # (that would defeat the hashed-token security model).
     _send_approval_notification(db, task, raw_token, artifact_id)
 
     logger.info(
-        "Promote task %s requires approval. Token generated (hash stored).",
+        "Promote task %s requires approval (safety check). Token generated.",
         task.id,
     )
     raise ApprovalRequired(
@@ -1373,9 +1367,12 @@ def handle_support_store_draft(db: Session, task: AgentTask, step: AgentTaskStep
     confidence = draft.get("confidence", 0.5)
     thread.confidence_score = confidence
 
-    # Store draft as outbound message (not sent yet, just drafted)
+    # Store the draft as a "draft" direction so it does not look like an
+    # actual outbound reply.  Using direction="outbound" would make the
+    # SLA timer think we already responded and stop escalation scanning.
+    # Phase 3 is draft-only: the founder reviews and sends manually.
     draft_body = draft.get("draft_response", "")
-    add_message_to_thread(db, thread, "outbound", f"[DRAFT] {draft_body}")
+    add_message_to_thread(db, thread, "draft", f"{draft_body}")
 
     # Check if escalation needed
     needs_escalation = draft.get("needs_escalation", False) or confidence < CONFIDENCE_THRESHOLD

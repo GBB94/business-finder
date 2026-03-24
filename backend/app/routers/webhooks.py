@@ -171,40 +171,52 @@ async def resend_webhook(
     # Deduplicate on svix message ID
     provider_event_id = svix_id or ""
     existing = _dedupe_by_provider_event_id(db, launch_id, provider_event_id)
-    if existing:
-        logger.info("Resend webhook %s already processed (event=%s), skipping", provider_event_id, existing.id)
-        return {"status": "duplicate", "event_id": existing.id}
+    is_duplicate = existing is not None
 
-    event = OperationalEvent(
-        launch_id=launch_id,
-        event_type=mapped_type,
-        provider_event_id=provider_event_id or None,
-        payload={
-            "provider": "resend",
-            "provider_event_id": provider_event_id,
-            "resend_event_type": event_type,
-            "email_id": data.get("email_id") or data.get("id"),
-            "to": data.get("to"),
-            "bounce_type": data.get("bounce", {}).get("bounce_type") if isinstance(data.get("bounce"), dict) else None,
-        },
-    )
-    db.add(event)
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        logger.info("Resend webhook %s lost race (unique constraint), treating as duplicate", provider_event_id)
-        return {"status": "duplicate", "event_id": None}
+    if not is_duplicate:
+        event = OperationalEvent(
+            launch_id=launch_id,
+            event_type=mapped_type,
+            provider_event_id=provider_event_id or None,
+            payload={
+                "provider": "resend",
+                "provider_event_id": provider_event_id,
+                "resend_event_type": event_type,
+                "email_id": data.get("email_id") or data.get("id"),
+                "to": data.get("to"),
+                "bounce_type": data.get("bounce", {}).get("bounce_type") if isinstance(data.get("bounce"), dict) else None,
+            },
+        )
+        db.add(event)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            is_duplicate = True
 
-    logger.info("Created %s event for launch=%s from Resend webhook", mapped_type, launch_id)
+    # For non-inbound events, duplicates can exit early
+    if is_duplicate and mapped_type != "email_received":
+        logger.info("Resend webhook %s already processed, skipping", provider_event_id)
+        return {"status": "duplicate", "event_id": existing.id if existing else None}
 
-    # For inbound emails, create and enqueue a triage task.
-    # Both DB commit and Redis enqueue must succeed. If either fails,
-    # we return 503 so the webhook provider retries the whole delivery.
+    if not is_duplicate:
+        logger.info("Created %s event for launch=%s from Resend webhook", mapped_type, launch_id)
+
+        # Critical events (bounces) trigger an immediate CEO evaluation
+        if mapped_type == "email_bounced":
+            from app.services.interrupt_emitter import trigger_and_enqueue
+            trigger_and_enqueue(db, launch_id, mapped_type)
+
+    # For inbound emails, ensure a triage task exists and is enqueued.
+    # This runs even on duplicate event retries so that a prior failure
+    # (DB commit succeeded but Redis enqueue failed) can be repaired.
+    # The idempotency_key on the task prevents double-creation.
     if mapped_type == "email_received":
         from app.services.agent_task_service import create_task
         from app.jobs.agent_task_runner import _queue_for_task
         from rq import Queue as RqQueue
+
+        idem_key = f"triage:{provider_event_id}" if provider_event_id else None
 
         try:
             task = create_task(
@@ -212,6 +224,7 @@ async def resend_webhook(
                 idea_id=launch.idea_id,
                 user_id=launch.user_id,
                 task_type="triage_inbox",
+                idempotency_key=idem_key,
                 input_params={
                     "customer_email": data.get("from") or data.get("sender") or "",
                     "subject": data.get("subject") or "",
@@ -219,23 +232,30 @@ async def resend_webhook(
                     "message_id": data.get("id") or data.get("message_id") or "",
                 },
             )
-            # Set launch_id and agent_type before committing so they
-            # are part of the same transaction as the task creation.
+            # Set launch_id and agent_type. For idempotent re-finds these
+            # are already set, but the update is harmless.
             task.launch_id = launch_id
             task.agent_type = "support"
             db.commit()
             db.refresh(task)
 
-            conn = redis.from_url(settings.REDIS_URL)
-            q = RqQueue(_queue_for_task("triage_inbox"), connection=conn)
-            q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
-            logger.info("Triggered triage_inbox task %s for inbound email", task.id)
+            # Only enqueue if the task is still waiting to be picked up.
+            # If a prior attempt already enqueued it and the worker claimed
+            # it, re-enqueueing would cause duplicate execution.
+            if task.status == "queued":
+                conn = redis.from_url(settings.REDIS_URL)
+                q = RqQueue(_queue_for_task("triage_inbox"), connection=conn)
+                q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
+                logger.info("Enqueued triage_inbox task %s for inbound email", task.id)
+            else:
+                logger.info("Triage task %s already in status %s, skipping enqueue", task.id, task.status)
         except Exception:
             db.rollback()
             logger.exception("Failed to create/enqueue triage_inbox for launch=%s", launch_id)
             raise HTTPException(503, "Failed to enqueue support triage task")
 
-    return {"status": "processed", "event_type": mapped_type, "event_id": event.id}
+    event_id = event.id if not is_duplicate else (existing.id if existing else None)
+    return {"status": "processed" if not is_duplicate else "repaired", "event_type": mapped_type, "event_id": event_id}
 
 
 # ---------------------------------------------------------------------------
@@ -353,4 +373,9 @@ async def stripe_webhook(
         return {"status": "duplicate", "event_id": None}
 
     logger.info("Created error event for launch=%s from Stripe webhook (%s)", launch_id, event_type)
+
+    # Payment failures trigger an immediate CEO evaluation
+    from app.services.interrupt_emitter import trigger_and_enqueue
+    trigger_and_enqueue(db, launch_id, "error")
+
     return {"status": "processed", "event_type": event_type, "event_id": event.id}

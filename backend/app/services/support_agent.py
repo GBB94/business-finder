@@ -139,10 +139,13 @@ async def draft_response(
 
     client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-    # Build conversation context
+    # Build conversation context (skip drafts: they were never sent to the customer)
     thread_text = ""
     for msg in thread_messages:
-        direction = "Customer" if msg.get("direction") == "inbound" else "Support"
+        msg_dir = msg.get("direction", "")
+        if msg_dir == "draft":
+            continue
+        direction = "Customer" if msg_dir == "inbound" else "Support"
         thread_text += f"\n[{direction}] ({msg.get('timestamp', 'unknown')}):\n{msg.get('body', '')}\n"
 
     user_content = (
@@ -264,12 +267,17 @@ def check_escalation_sla(db: Session, launch_id: str) -> list[SupportThread]:
         messages = thread.messages or []
         if not messages:
             continue
-        # Check if last message is inbound (customer waiting)
-        last_msg = messages[-1]
-        if last_msg.get("direction") != "inbound":
+        # Find the last non-draft message. Drafts don't count as replies
+        # because the customer hasn't received them yet (Phase 3).
+        last_real_msg = None
+        for msg in reversed(messages):
+            if msg.get("direction") in ("inbound", "outbound"):
+                last_real_msg = msg
+                break
+        if not last_real_msg or last_real_msg.get("direction") != "inbound":
             continue
         # Use the timestamp of the last inbound message for SLA check
-        msg_ts = last_msg.get("timestamp")
+        msg_ts = last_real_msg.get("timestamp")
         if not msg_ts:
             continue
         try:

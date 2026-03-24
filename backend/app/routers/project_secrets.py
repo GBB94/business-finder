@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies.auth import get_current_user
+from app.models.audit_log import AuditLog
 from app.models.idea import Idea
 from app.models.project_secret import ProjectSecret
 from app.models.user import User
@@ -15,6 +18,8 @@ from app.schemas.project_secret import (
     ProjectSecretListResponse,
 )
 from app.services.secret_service import encrypt_value, decrypt_value
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ideas/{idea_id}/secrets", tags=["project-secrets"])
 
@@ -109,10 +114,27 @@ def get_secret(
     if not secret:
         raise HTTPException(404, f"Secret '{key_name}' not found")
 
+    plaintext = decrypt_value(secret.encrypted_value)
+
+    # Audit-log every secret decryption
+    db.add(AuditLog(
+        launch_id=None,
+        actor="founder",
+        action="secret_accessed",
+        resource_type="project_secret",
+        resource_id=secret.id,
+        details={
+            "idea_id": idea_id,
+            "environment": environment,
+            "key_name": key_name,
+        },
+    ))
+    db.commit()
+
     return ProjectSecretValueResponse(
         key_name=secret.key_name,
         environment=secret.environment,
-        value=decrypt_value(secret.encrypted_value),
+        value=plaintext,
     )
 
 
