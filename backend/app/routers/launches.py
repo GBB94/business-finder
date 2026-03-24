@@ -8,9 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-import redis
-from rq import Queue
-
 logger = logging.getLogger(__name__)
 
 from app.config import settings
@@ -25,6 +22,7 @@ from app.models.operational_event import OperationalEvent
 from app.models.project_metrics_daily import ProjectMetricsDaily
 from app.models.user import User
 from app.services.agent_task_service import create_task
+from app.services.task_enqueue import enqueue_task
 from app.schemas.agent_task import AgentTaskResponse, AgentTaskListResponse
 from app.schemas.launch import (
     AuditLogListResponse,
@@ -129,29 +127,14 @@ def create_launch(
     task.launch_id = launch.id
     task.agent_type = "engineering"
 
-    db.commit()
-    db.refresh(launch)
-
-    # Enqueue to the provision queue
-    try:
-        conn = redis.from_url(settings.REDIS_URL)
-        q = Queue("provision", connection=conn)
-        q.enqueue(
-            "app.jobs.agent_task_runner.run_agent_task",
-            task.id,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to enqueue provision task %s for launch %s", task.id, launch.id
-        )
-        task.status = "failed"
-        task.error_message = "Failed to enqueue provision task — Redis unavailable"
+    if not enqueue_task(db, task):
         launch.status = "killed"
         _write_audit(db, launch.id, "system", "task_failed", {
             "reason": "Redis unavailable during launch creation",
         })
         db.commit()
-        db.refresh(launch)
+
+    db.refresh(launch)
 
     return _to_response(launch, db)
 
@@ -451,21 +434,8 @@ def trigger_task(
         "manual_trigger": True,
     })
 
-    db.commit()
+    enqueue_task(db, task)
     db.refresh(task)
-
-    # Enqueue to the correct queue
-    try:
-        from app.jobs.agent_task_runner import _queue_for_task
-        conn = redis.from_url(settings.REDIS_URL)
-        q = Queue(_queue_for_task(body.task_type), connection=conn)
-        q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
-    except Exception:
-        logger.exception("Failed to enqueue triggered task %s", task.id)
-        task.status = "failed"
-        task.error_message = "Failed to enqueue task. Is Redis running?"
-        db.commit()
-        db.refresh(task)
 
     return AgentTaskResponse.model_validate(task)
 

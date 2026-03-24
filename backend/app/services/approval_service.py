@@ -135,21 +135,13 @@ def verify_and_approve(
     db.add(audit)
     db.commit()
 
-    # Re-enqueue to the correct worker queue so the runner picks it up
+    # Re-enqueue to the correct worker queue so the runner picks it up.
+    # enqueue_task commits and enqueues as one unit. If Redis fails, the
+    # task is marked 'failed' (not stranded in 'queued'). We revert the
+    # approval so the founder can retry with the same token.
     if was_waiting:
-        try:
-            import redis as redis_lib
-            from rq import Queue
-            from app.config import settings
-            from app.jobs.agent_task_runner import _queue_for_task
-            conn = redis_lib.from_url(settings.REDIS_URL)
-            q = Queue(_queue_for_task(task.task_type), connection=conn)
-            q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
-            logger.info("Re-enqueued approved task=%s to queue=%s", task.id, _queue_for_task(task.task_type))
-        except Exception:
-            # Redis unavailable: fully revert so the task stays visible in
-            # /api/approvals/pending and the same token can be used again.
-            logger.exception("Failed to re-enqueue approved task=%s, reverting approval", task.id)
+        from app.services.task_enqueue import enqueue_task
+        if not enqueue_task(db, task):
             task.status = "waiting_for_approval"
             task.approval_status = "pending_approval"
             task.approval_used_at = None

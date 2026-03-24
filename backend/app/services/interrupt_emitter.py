@@ -67,6 +67,7 @@ def trigger_and_enqueue(
 
     # Create the task (create_task commits internally)
     from app.services.agent_task_service import create_task
+    from app.services.task_enqueue import enqueue_task
 
     task = create_task(
         db,
@@ -87,31 +88,11 @@ def trigger_and_enqueue(
         },
     )
     db.add(event)
-    db.commit()
 
-    # Enqueue to Redis
-    try:
-        import redis as redis_lib
-        from rq import Queue
-        from app.jobs.agent_task_runner import _queue_for_task
-
-        conn = redis_lib.from_url(settings.REDIS_URL)
-        q = Queue(_queue_for_task("ceo_nightly"), connection=conn)
-        q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
-        logger.info(
-            "CEO interrupt triggered and enqueued for launch=%s by %s event (task=%s)",
-            launch_id, event_type, task.id,
-        )
-        return True
-
-    except Exception:
-        # Redis failed. Delete the task and event so nothing is stranded.
-        # The next critical event will retry the whole sequence.
-        logger.exception(
-            "Redis enqueue failed for CEO interrupt task %s, cleaning up", task.id,
-        )
+    if not enqueue_task(db, task):
+        # Redis failed. Delete task and event so the next critical event
+        # can retry cleanly (interrupt tasks should not block the cooldown).
         try:
-            # Delete steps first (FK constraint)
             for step in task.steps:
                 db.delete(step)
             db.delete(task)
@@ -121,3 +102,9 @@ def trigger_and_enqueue(
             db.rollback()
             logger.exception("Failed to clean up stranded interrupt task %s", task.id)
         return False
+
+    logger.info(
+        "CEO interrupt triggered and enqueued for launch=%s by %s event (task=%s)",
+        launch_id, event_type, task.id,
+    )
+    return True

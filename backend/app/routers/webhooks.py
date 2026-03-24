@@ -213,8 +213,7 @@ async def resend_webhook(
     # The idempotency_key on the task prevents double-creation.
     if mapped_type == "email_received":
         from app.services.agent_task_service import create_task
-        from app.jobs.agent_task_runner import _queue_for_task
-        from rq import Queue as RqQueue
+        from app.services.task_enqueue import enqueue_task
 
         idem_key = f"triage:{provider_event_id}" if provider_event_id else None
 
@@ -236,18 +235,14 @@ async def resend_webhook(
             # are already set, but the update is harmless.
             task.launch_id = launch_id
             task.agent_type = "support"
-            db.commit()
-            db.refresh(task)
 
             # Only enqueue if the task is still waiting to be picked up.
             # If a prior attempt already enqueued it and the worker claimed
             # it, re-enqueueing would cause duplicate execution.
             if task.status == "queued":
-                conn = redis.from_url(settings.REDIS_URL)
-                q = RqQueue(_queue_for_task("triage_inbox"), connection=conn)
-                q.enqueue("app.jobs.agent_task_runner.run_agent_task", task.id)
-                logger.info("Enqueued triage_inbox task %s for inbound email", task.id)
+                enqueue_task(db, task)
             else:
+                db.commit()
                 logger.info("Triage task %s already in status %s, skipping enqueue", task.id, task.status)
         except Exception:
             db.rollback()

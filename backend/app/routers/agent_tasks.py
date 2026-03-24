@@ -5,11 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-import redis
-from rq import Queue
-
 from app.config import settings
-from app.jobs.agent_task_runner import _queue_for_task
 
 logger = logging.getLogger(__name__)
 from app.database import get_db
@@ -24,6 +20,7 @@ from app.schemas.agent_task import (
     AgentTaskListResponse,
 )
 from app.services.agent_task_service import create_task, cancel_task, VALID_TASK_TYPES
+from app.services.task_enqueue import enqueue_task
 
 router = APIRouter(prefix="/api/ideas/{idea_id}/tasks", tags=["agent-tasks"])
 
@@ -98,25 +95,13 @@ def create_agent_task(
         task.launch_id = body.launch_id
     if body.agent_type:
         task.agent_type = body.agent_type
-    db.commit()
-    db.refresh(task)
 
-    # Enqueue to the correct queue based on task type
+    # Commit + enqueue as one recoverable unit
     if task.status == "queued":
-        try:
-            conn = redis.from_url(settings.REDIS_URL)
-            queue_name = _queue_for_task(body.task_type)
-            q = Queue(queue_name, connection=conn)
-            q.enqueue(
-                "app.jobs.agent_task_runner.run_agent_task",
-                task.id,
-            )
-        except Exception:
-            logger.exception("Failed to enqueue agent task %s to Redis", task.id)
-            task.status = "failed"
-            task.error_message = "Failed to enqueue task — Redis unavailable"
-            db.commit()
-            db.refresh(task)
+        enqueue_task(db, task)
+    else:
+        db.commit()
+    db.refresh(task)
 
     return AgentTaskResponse.model_validate(task)
 

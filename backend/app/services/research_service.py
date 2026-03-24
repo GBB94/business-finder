@@ -79,7 +79,7 @@ def enqueue_community_scan(
     except Exception:
         logger.exception("Failed to enqueue job %s — Redis may be unavailable", job.id)
         job.status = JobStatus.failed
-        job.error_message = "Failed to connect to job queue. Is Redis running?"
+        job.error_message = "Failed to enqueue job — Redis unavailable"
         job.completed_at = datetime.now(timezone.utc)
         db.commit()
 
