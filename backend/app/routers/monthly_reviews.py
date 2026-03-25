@@ -57,10 +57,27 @@ def create_review(
         if t.get("fired") or t.get("state") == "red"
     ]
 
+    # Build confidence snapshot from current score if not provided
+    confidence_snapshot = body.score_confidence_snapshot
+    if confidence_snapshot is None:
+        score = (
+            db.query(Score)
+            .filter_by(idea_id=idea_id, user_id=current_user.id)
+            .order_by(Score.scored_at.desc())
+            .first()
+        )
+        if score:
+            confidence_snapshot = {
+                dim: getattr(score, f"{dim}_confidence", "low")
+                for dim in SCORING_DIMENSIONS
+            }
+
     review = MonthlyReview(
         idea_id=idea_id,
         user_id=current_user.id,
         review_date=body.review_date,
+        review_type=body.review_type,
+        score_confidence_snapshot=confidence_snapshot,
         metrics_snapshot=metrics_snapshot,
         kill_triggers_fired=fired_labels if fired_labels else None,
         decision=body.decision,
@@ -80,6 +97,12 @@ def create_review(
             transition_status(db, idea, target)
         except ValueError:
             pass
+    elif body.decision == "graduate_to_standard":
+        idea.validation_mode = "standard"
+        from app.services.idea_service import seed_kill_triggers, DEFAULT_KILL_TRIGGERS
+        idea.kill_triggers = DEFAULT_KILL_TRIGGERS.copy()
+        db.add(idea)
+        db.commit()
 
     return MonthlyReviewResponse.model_validate(review)
 

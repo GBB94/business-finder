@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 OfferLadderRungType = Literal["service", "productized_service", "software"]
 ProductUseFrequencyType = Literal["daily", "weekly", "monthly"]
 PaymentModelType = Literal["stripe_direct", "paddle_mor", "lemonsqueezy_mor", "other"]
+ValidationModeType = Literal["standard", "speed"]
 IdeaStatusType = Literal[
     "discovery", "scoring", "validating", "building",
     "retention", "growing", "killed", "parked",
@@ -27,6 +28,7 @@ class IdeaCreate(BaseModel):
     activation_event: Optional[str] = None
     payment_model: Optional[PaymentModelType] = None
     expected_international_pct: Optional[int] = None
+    validation_mode: ValidationModeType = "standard"
 
 
 class IdeaUpdate(BaseModel):
@@ -67,6 +69,7 @@ class IdeaResponse(BaseModel):
     activation_event: Optional[str]
     payment_model: Optional[str]
     expected_international_pct: Optional[int]
+    validation_mode: str = "standard"
     status: str
     gate_1_status: str
     gate_2_status: str

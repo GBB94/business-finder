@@ -112,9 +112,100 @@ def transition_status(db: Session, idea: Idea, new_status: str) -> Idea:
     return idea
 
 
+DEFAULT_KILL_TRIGGERS_SPEED = {
+    "no_paying_customers_42d": {
+        "label": "No paying customers after 42 days",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "validation_mode_preset": "speed",
+    },
+    "no_signups_14d": {
+        "label": "No signups after 14 days of live traffic",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "validation_mode_preset": "speed",
+    },
+    "runway_below_floor": {
+        "label": "Runway drops below floor months",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "validation_mode_preset": "speed",
+    },
+    "founder_lost_conviction": {
+        "label": "Founder lost conviction in the problem",
+        "category": "soft",
+        "state": "grey",
+        "fired": False,
+        "validation_mode_preset": "speed",
+    },
+    "activation_below_floor": {
+        "label": "Activation rate below floor",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 30,
+        "sample_window_days": 14,
+        "metric_key": "activation_rate",
+        "first_breach_at": None,
+        "validation_mode_preset": "speed",
+    },
+    "churn_above_ceiling": {
+        "label": "Monthly churn above ceiling",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 20,
+        "sample_window_days": 28,
+        "metric_key": "monthly_churn",
+        "first_breach_at": None,
+        "validation_mode_preset": "speed",
+    },
+    "cac_payback_over_8wk": {
+        "label": "CAC payback exceeds 8 weeks",
+        "category": "hard",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 10,
+        "sample_window_days": 56,
+        "metric_key": None,
+        "first_breach_at": None,
+        "validation_mode_preset": "speed",
+    },
+    "poor_activation": {
+        "label": "Activation consistently below threshold",
+        "category": "soft",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 30,
+        "sample_window_days": 14,
+        "metric_key": "activation_rate",
+        "first_breach_at": None,
+        "validation_mode_preset": "speed",
+    },
+    "bad_margins": {
+        "label": "Gross margins below sustainable level",
+        "category": "soft",
+        "state": "grey",
+        "fired": False,
+        "min_sample_size": 3,
+        "sample_window_days": 28,
+        "metric_key": "gross_margin",
+        "first_breach_at": None,
+        "validation_mode_preset": "speed",
+    },
+}
+
+
 def seed_kill_triggers(idea: Idea) -> None:
     if idea.kill_triggers is None:
-        idea.kill_triggers = DEFAULT_KILL_TRIGGERS.copy()
+        mode = getattr(idea, "validation_mode", "standard")
+        if mode == "speed":
+            idea.kill_triggers = copy.deepcopy(DEFAULT_KILL_TRIGGERS_SPEED)
+        else:
+            idea.kill_triggers = DEFAULT_KILL_TRIGGERS.copy()
 
 
 def compute_days_in_stage(idea: Idea) -> int:
@@ -165,8 +256,28 @@ def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
     for key in triggers:
         _ensure_trigger_shape(triggers[key])
 
-    # --- no_paying_customers_90d ---
-    trigger = triggers.get("no_paying_customers_90d")
+    # --- no_paying_customers (90d standard, 42d speed) ---
+    for key, threshold_days in [("no_paying_customers_90d", 90), ("no_paying_customers_42d", 42)]:
+        trigger = triggers.get(key)
+        if trigger and not trigger.get("fired"):
+            status = idea.status if isinstance(idea.status, str) else idea.status.value
+            if status in _VALIDATION_STAGES:
+                created = idea.created_at
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                days_since_creation = (datetime.now(timezone.utc) - created).days
+                if days_since_creation >= threshold_days:
+                    pre_sale_count = sum(
+                        1 for ev in idea.evidence
+                        if (ev.evidence_type if isinstance(ev.evidence_type, str)
+                            else ev.evidence_type.value) == "pre_sale"
+                    )
+                    if pre_sale_count == 0:
+                        trigger["fired"] = True
+                        trigger["state"] = "red"
+
+    # --- no_signups_14d (speed mode only) ---
+    trigger = triggers.get("no_signups_14d")
     if trigger and not trigger.get("fired"):
         status = idea.status if isinstance(idea.status, str) else idea.status.value
         if status in _VALIDATION_STAGES:
@@ -174,13 +285,13 @@ def evaluate_kill_triggers(db: Session, idea: Idea) -> dict:
             if created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
             days_since_creation = (datetime.now(timezone.utc) - created).days
-            if days_since_creation >= 90:
-                pre_sale_count = sum(
+            if days_since_creation >= 14:
+                signup_count = sum(
                     1 for ev in idea.evidence
                     if (ev.evidence_type if isinstance(ev.evidence_type, str)
-                        else ev.evidence_type.value) == "pre_sale"
+                        else ev.evidence_type.value) == "landing_page_metric"
                 )
-                if pre_sale_count == 0:
+                if signup_count == 0:
                     trigger["fired"] = True
                     trigger["state"] = "red"
 

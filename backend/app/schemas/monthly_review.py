@@ -5,12 +5,15 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel
 
-ReviewDecisionType = Literal["continue", "pivot", "kill", "park"]
+ReviewDecisionType = Literal["continue", "pivot", "kill", "park", "graduate_to_standard"]
+ReviewTypeType = Literal["monthly", "biweekly"]
 
 
 class MonthlyReviewCreate(BaseModel):
     review_date: date
+    review_type: ReviewTypeType = "monthly"
     metrics_snapshot: Optional[dict] = None
+    score_confidence_snapshot: Optional[dict] = None
     decision: ReviewDecisionType
     reasoning: Optional[str] = None
     next_hypothesis: Optional[str] = None
@@ -27,6 +30,8 @@ class MonthlyReviewResponse(BaseModel):
     gate_1_status_at_review: Optional[str]
     gate_2_status_at_review: Optional[str]
     gate_3_status_at_review: Optional[str]
+    review_type: str = "monthly"
+    score_confidence_snapshot: Optional[dict] = None
     kill_triggers_fired: Optional[list]
     decision: str
     reasoning: Optional[str]

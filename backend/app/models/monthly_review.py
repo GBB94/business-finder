@@ -16,6 +16,7 @@ class ReviewDecision(str, enum.Enum):
     pivot = "pivot"
     kill = "kill"
     park = "park"
+    graduate_to_standard = "graduate_to_standard"
 
 
 def _utcnow():
@@ -35,6 +36,9 @@ class MonthlyReview(Base):
     gate_1_status_at_review: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     gate_2_status_at_review: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     gate_3_status_at_review: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    review_type: Mapped[str] = mapped_column(String(10), nullable=False, default="monthly")
+    score_confidence_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     kill_triggers_fired: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     decision: Mapped[str] = mapped_column(Enum(ReviewDecision), nullable=False)

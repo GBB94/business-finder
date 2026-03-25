@@ -58,6 +58,20 @@ class Score(Base):
     defensibility_potential_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     defensibility_potential_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Per-dimension confidence (low/medium/high)
+    problem_severity_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    market_evidence_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    revenue_model_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    distribution_feasibility_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    purchaser_quality_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    build_complexity_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    founder_market_fit_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    time_to_revenue_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    founder_constraints_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="high")
+    competition_level_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    defensibility_potential_confidence: Mapped[str] = mapped_column(String(10), nullable=False, default="low")
+    low_confidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=11)
+
     weighted_total: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     disqualifiers_checked: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 

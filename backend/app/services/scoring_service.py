@@ -44,6 +44,15 @@ def check_disqualifiers(score: Score) -> list[str]:
 AUTO_COMPUTED_DIMENSIONS = {"founder_constraints"}
 
 
+def _compute_low_confidence_count(score: Score) -> int:
+    """Count dimensions with 'low' confidence, excluding founder_constraints."""
+    dims_to_check = [d for d in SCORING_DIMENSIONS if d != "founder_constraints"]
+    return sum(
+        1 for dim in dims_to_check
+        if getattr(score, f"{dim}_confidence", "low") == "low"
+    )
+
+
 def update_score_dimensions(
     db: Session,
     score: Score,
@@ -57,9 +66,13 @@ def update_score_dimensions(
         setattr(score, f"{dim}_score", d["score"])
         if "note" in d and d["note"] is not None:
             setattr(score, f"{dim}_note", d["note"])
+        confidence = d.get("confidence", "low")
+        if confidence in ("low", "medium", "high"):
+            setattr(score, f"{dim}_confidence", confidence)
 
     score.weighted_total = compute_weighted_total(score, weights)
     score.disqualifiers_checked = check_disqualifiers(score)
+    score.low_confidence_count = _compute_low_confidence_count(score)
 
     db.add(score)
     db.flush()
@@ -119,12 +132,15 @@ def apply_auto_constraints(db: Session, score: Score) -> Score:
         val, note = compute_founder_constraints(profile)
         score.founder_constraints_score = val
         score.founder_constraints_note = note
+        score.founder_constraints_confidence = "high"
     else:
         score.founder_constraints_score = None
-        score.founder_constraints_note = "No founder profile — set up your profile to auto-compute."
+        score.founder_constraints_note = "No founder profile. Set up your profile to auto-compute."
+        score.founder_constraints_confidence = "high"
 
     weights = get_weights_map(db, idea.user_id)
     score.weighted_total = compute_weighted_total(score, weights)
+    score.low_confidence_count = _compute_low_confidence_count(score)
 
     db.add(score)
     db.flush()

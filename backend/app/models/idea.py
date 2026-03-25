@@ -91,6 +91,8 @@ class Idea(Base):
         Enum(GateStatus), nullable=False, default=GateStatus.not_started
     )
 
+    validation_mode: Mapped[str] = mapped_column(String(10), nullable=False, default="standard")
+
     kill_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     kill_triggers: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 

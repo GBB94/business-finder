@@ -45,7 +45,10 @@ export type SourceType =
   | "other";
 
 export type Sentiment = "positive" | "negative" | "neutral" | "mixed";
-export type ReviewDecision = "continue" | "pivot" | "kill" | "park";
+export type ValidationMode = "standard" | "speed";
+export type ConfidenceLevel = "low" | "medium" | "high";
+export type ReviewDecision = "continue" | "pivot" | "kill" | "park" | "graduate_to_standard";
+export type ReviewType = "monthly" | "biweekly";
 
 // Response interfaces
 export interface Idea {
@@ -62,6 +65,7 @@ export interface Idea {
   activation_event: string | null;
   payment_model: PaymentModel | null;
   expected_international_pct: number | null;
+  validation_mode: ValidationMode;
   status: IdeaStatus;
   gate_1_status: GateStatus;
   gate_2_status: GateStatus;
@@ -81,6 +85,13 @@ export interface IdeaListResponse {
   total: number;
 }
 
+export interface DimensionScoreCreate {
+  dimension: string;
+  score: number;
+  note?: string;
+  confidence?: ConfidenceLevel;
+}
+
 export interface DimensionScore {
   dimension: string;
   score: number | null;
@@ -88,6 +99,7 @@ export interface DimensionScore {
   weight: number;
   weighted_contribution: number | null;
   auto_computed?: boolean;
+  confidence: ConfidenceLevel;
 }
 
 export interface ScoreResponse {
@@ -96,6 +108,7 @@ export interface ScoreResponse {
   user_id: string;
   weighted_total: number | null;
   disqualifiers_checked: string[] | null;
+  low_confidence_count: number;
   scored_at: string;
   updated_at: string;
   dimensions: DimensionScore[];
@@ -143,6 +156,8 @@ export interface MonthlyReview {
   idea_id: string;
   user_id: string;
   review_date: string;
+  review_type: ReviewType;
+  score_confidence_snapshot: Record<string, ConfidenceLevel> | null;
   metrics_snapshot: Record<string, unknown> | null;
   gate_1_status_at_review: string | null;
   gate_2_status_at_review: string | null;

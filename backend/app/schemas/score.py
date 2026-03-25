@@ -16,10 +16,14 @@ ScoringDimensionType = Literal[
 ]
 
 
+ConfidenceLevelType = Literal["low", "medium", "high"]
+
+
 class DimensionScoreInput(BaseModel):
     dimension: ScoringDimensionType
     score: int = Field(..., ge=1, le=5)
     note: Optional[str] = None
+    confidence: ConfidenceLevelType = "low"
 
 
 class ScoreCreate(BaseModel):
@@ -37,6 +41,7 @@ class DimensionScoreResponse(BaseModel):
     weight: float
     weighted_contribution: Optional[float]
     auto_computed: bool = False
+    confidence: str = "low"
 
 
 class ScoreResponse(BaseModel):
@@ -47,6 +52,7 @@ class ScoreResponse(BaseModel):
     user_id: str
     weighted_total: Optional[float]
     disqualifiers_checked: Optional[list]
+    low_confidence_count: int = 11
     scored_at: datetime
     updated_at: datetime
     dimensions: list[DimensionScoreResponse] = []

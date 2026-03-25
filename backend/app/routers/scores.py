@@ -46,10 +46,12 @@ def _build_response(score: Score, weights: dict[str, float]) -> ScoreResponse:
         note = getattr(score, f"{dim}_note", None)
         w = weights.get(dim, 0.0)
         contrib = round((val / 5.0) * w, 2) if val is not None else None
+        confidence = getattr(score, f"{dim}_confidence", "low")
         dims.append(
             DimensionScoreResponse(
                 dimension=dim, score=val, note=note, weight=w, weighted_contribution=contrib,
                 auto_computed=(dim == "founder_constraints"),
+                confidence=confidence,
             )
         )
     resp = ScoreResponse.model_validate(score)
@@ -67,6 +69,7 @@ def _record_score_snapshot(db: Session, score: Score, weights: dict[str, float])
                 "score": val,
                 "note": getattr(score, f"{dim}_note", None),
                 "weight": weights.get(dim, 0.0),
+                "confidence": getattr(score, f"{dim}_confidence", "low"),
             }
     snapshot = ScoreHistory(
         idea_id=score.idea_id,
