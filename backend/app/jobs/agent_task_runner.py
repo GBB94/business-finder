@@ -337,7 +337,8 @@ def run_agent_task(task_id: str) -> None:
         db.rollback()
 
         # Non-retryable errors go straight to dead_letter
-        is_terminal = isinstance(exc, (LockLostError, NotImplementedError, TokenBudgetExceeded, BudgetExceeded))
+        from app.services.bounce_detector import OutboundPausedError
+        is_terminal = isinstance(exc, (LockLostError, NotImplementedError, TokenBudgetExceeded, BudgetExceeded, OutboundPausedError))
 
         task = db.query(AgentTask).filter_by(id=task_id).first()
         if task:

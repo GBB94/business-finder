@@ -387,9 +387,13 @@ async def _provision_neon_db(db: Session, task: AgentTask) -> dict:
 async def _provision_render_service(db: Session, task: AgentTask) -> dict:
     """Create a Render web service connected to the project's GitHub repo.
 
-    The service auto-deploys from the repo's default branch. Preview env
-    vars are set during creation; production credentials are swapped in
-    during the promote step.
+    Render free tier uses a single service per project. Preview and
+    production share the same service URL; isolation is achieved by
+    swapping env vars (preview credentials -> production credentials)
+    during the promote step, not by creating separate services.
+
+    Preview env vars are set at creation so the first deploy has real
+    credentials (Stripe test, Resend sandbox, Neon branch DB).
     """
     from app.services import render_service
 

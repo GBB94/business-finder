@@ -16,6 +16,10 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.audit_log import AuditLog
+
+
+class OutboundPausedError(RuntimeError):
+    """Raised when outbound email is paused for a project due to high bounce rate."""
 from app.models.launch_instance import LaunchInstance
 from app.models.operational_event import OperationalEvent
 

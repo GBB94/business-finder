@@ -618,24 +618,82 @@ def handle_scaffold_generate(db: Session, task: AgentTask, step: AgentTaskStep, 
 
 
 def handle_scaffold_commit(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Commit generated code to a branch. Stub.
+    """Commit generated scaffold code to a feature branch on GitHub.
 
-    Persists the branch name on the LaunchInstance so the promote step
-    knows which branch to merge into main.
+    Creates the branch on GitHub from the scaffold output in the workdir,
+    then persists the branch name on LaunchInstance so promote knows
+    which ref to merge. Falls back to stub mode if GitHub is not configured.
     """
     from app.models.launch_instance import LaunchInstance
+    from app.config import settings as app_settings
 
     launch_id = task.launch_id
     branch_name = f"scaffold-{launch_id[:8]}"
 
-    # Store the working branch on the launch so promote can find it
     launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+
+    if app_settings.GITHUB_TOKEN and launch and launch.github_repo_url:
+        import subprocess
+        from pathlib import Path
+
+        workdir = (task.input_params or {}).get("workdir")
+        repo_url = launch.github_repo_url
+        # Use token-authenticated URL for push
+        auth_url = repo_url.replace(
+            "https://github.com/",
+            f"https://x-access-token:{app_settings.GITHUB_TOKEN}@github.com/",
+        )
+
+        if workdir and Path(workdir).exists():
+            # Clone, create branch, copy scaffold files, commit, push
+            clone_dir = Path(workdir) / "_repo"
+            subprocess.run(
+                ["git", "clone", "--depth=1", auth_url, str(clone_dir)],
+                check=True, capture_output=True, timeout=60,
+            )
+            subprocess.run(
+                ["git", "checkout", "-b", branch_name],
+                cwd=clone_dir, check=True, capture_output=True,
+            )
+
+            # Copy scaffold output into the repo (skip the _repo dir itself)
+            import shutil
+            for item in Path(workdir).iterdir():
+                if item.name == "_repo":
+                    continue
+                dest = clone_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
+
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=clone_dir, check=True, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", f"scaffold: initial project from template (task {task.id[:8]})"],
+                cwd=clone_dir, check=True, capture_output=True,
+                env={**__import__("os").environ, "GIT_AUTHOR_NAME": "LaunchPad", "GIT_AUTHOR_EMAIL": "launchpad@system", "GIT_COMMITTER_NAME": "LaunchPad", "GIT_COMMITTER_EMAIL": "launchpad@system"},
+            )
+            subprocess.run(
+                ["git", "push", "-u", "origin", branch_name],
+                cwd=clone_dir, check=True, capture_output=True, timeout=60,
+            )
+
+            logger.info("Pushed scaffold to branch '%s' for launch=%s", branch_name, launch_id)
+        else:
+            logger.warning("No workdir for scaffold commit, branch '%s' not created on GitHub", branch_name)
+    else:
+        logger.info("STUB: Would commit scaffold to branch '%s' for launch=%s", branch_name, launch_id)
+
+    # Always persist the branch name so promote can find it
     if launch:
         launch.working_branch = branch_name
         db.flush()
 
-    logger.info("STUB: Would commit scaffold to branch '%s' for launch=%s", branch_name, launch_id)
-    return {"status": "committed", "branch": branch_name, "stub": True}
+    is_stub = not (app_settings.GITHUB_TOKEN and launch and launch.github_repo_url)
+    return {"status": "committed", "branch": branch_name, "stub": is_stub}
 
 
 def handle_scaffold_trigger_build(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
@@ -1120,9 +1178,10 @@ def handle_marketing_check_budget(db: Session, task: AgentTask, step: AgentTaskS
     # Gate 1: bounce rate pause
     if is_outbound_paused(db, launch_id):
         from app.models.launch_instance import LaunchInstance
+        from app.services.bounce_detector import OutboundPausedError
         launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
         reason = launch.outbound_pause_reason if launch else "unknown"
-        raise RuntimeError(
+        raise OutboundPausedError(
             f"Outbound email is paused for this project: {reason}. "
             f"Review bounce logs and unpause from the dashboard before retrying."
         )
