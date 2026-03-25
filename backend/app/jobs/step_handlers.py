@@ -792,31 +792,144 @@ def handle_promote_check(db: Session, task: AgentTask, step: AgentTaskStep, inpu
 
 
 def handle_promote_merge(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Merge branch to main. Stub."""
-    logger.info("STUB: Would merge to main for launch=%s", task.launch_id)
-    return {"status": "merged", "branch": "main", "stub": True}
+    """Merge the project's working branch into main on GitHub."""
+    from app.models.launch_instance import LaunchInstance
+    from app.config import settings as app_settings
+
+    launch = db.query(LaunchInstance).filter_by(id=task.launch_id).first()
+    if not launch or not launch.github_repo_url:
+        logger.warning("No GitHub repo for launch=%s, skipping merge", task.launch_id)
+        return {"status": "skipped", "reason": "no_repo_url"}
+
+    if not app_settings.GITHUB_TOKEN:
+        logger.warning("GITHUB_TOKEN not configured, returning stub for launch=%s", task.launch_id)
+        return {"status": "merged", "branch": "main", "stub": True}
+
+    from app.services import github_service
+
+    # Extract full_name from URL (e.g. "https://github.com/GBB94/launchpad-abc123" -> "GBB94/launchpad-abc123")
+    repo_full_name = "/".join(launch.github_repo_url.rstrip("/").split("/")[-2:])
+
+    # The working branch name is in input_params, defaulting to "preview"
+    head_branch = (task.input_params or {}).get("branch", "preview")
+
+    result = github_service.merge_branch(
+        repo_full_name,
+        head=head_branch,
+        base="main",
+        commit_message=f"Promote to production (task {task.id[:8]})",
+    )
+
+    logger.info("Merge result for launch=%s: %s", task.launch_id, result["status"])
+    return {
+        "status": result["status"],
+        "sha": result.get("sha"),
+        "branch": "main",
+    }
 
 
 def handle_promote_swap(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Swap env to production. Stub."""
-    logger.info("STUB: Would swap env to production for launch=%s", task.launch_id)
-    return {"status": "env_swapped", "environment": "production", "stub": True}
+    """Swap the Render service's env vars from preview to production credentials.
+
+    Reads the production .env file and pushes those variables to Render.
+    This is the key credential isolation step: after this, the service
+    uses live Stripe keys, production Neon DB, and production Resend config.
+    """
+    from app.models.launch_instance import LaunchInstance
+    from app.services import env_file_service
+    from app.config import settings as app_settings
+
+    launch = db.query(LaunchInstance).filter_by(id=task.launch_id).first()
+    if not launch:
+        raise RuntimeError(f"Launch {task.launch_id} not found")
+
+    # Read the production env file (contains live credentials)
+    prod_env = env_file_service.read_env_file(
+        task.launch_id,
+        "production",
+        db=db,
+        actor="engineering_agent",
+        task_type="promote",
+    )
+
+    if not launch.render_service_id:
+        logger.warning("No Render service_id for launch=%s, skipping env swap", task.launch_id)
+        return {
+            "status": "env_swapped",
+            "environment": "production",
+            "keys_updated": list(prod_env.keys()),
+            "stub": True,
+            "note": "No Render service ID. Env file written but not pushed to Render.",
+        }
+
+    if not app_settings.RENDER_API_KEY:
+        logger.warning("RENDER_API_KEY not configured, returning stub for launch=%s", task.launch_id)
+        return {
+            "status": "env_swapped",
+            "environment": "production",
+            "keys_updated": list(prod_env.keys()),
+            "stub": True,
+        }
+
+    from app.services import render_service
+
+    # Push production credentials to Render (replaces all env vars)
+    result = render_service.update_env_vars(launch.render_service_id, prod_env)
+
+    # Trigger a redeploy so the new env vars take effect
+    deploy_result = render_service.trigger_deploy(launch.render_service_id)
+
+    logger.info(
+        "Swapped env to production for launch=%s, triggered redeploy %s",
+        task.launch_id, deploy_result.get("deploy_id"),
+    )
+    return {
+        "status": "env_swapped",
+        "environment": "production",
+        "keys_updated": result["keys_updated"],
+        "deploy_id": deploy_result.get("deploy_id"),
+    }
 
 
 def handle_promote_record(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Record promotion event."""
+    """Record promotion event and transition launch to active."""
     from app.models.operational_event import OperationalEvent
     from app.models.launch_instance import LaunchInstance
+    from app.models.audit_log import AuditLog
+
     launch = db.query(LaunchInstance).filter_by(id=task.launch_id).first()
     if launch:
         launch.status = "active"
-        launch.production_url = f"https://project-{task.launch_id[:8]}.onrender.com"
+        # Use the preview URL as production URL (same Render service, now
+        # running with production credentials after env swap)
+        if not launch.production_url:
+            launch.production_url = launch.preview_url or f"https://project-{task.launch_id[:8]}.onrender.com"
+
     event = OperationalEvent(
         launch_id=task.launch_id,
         event_type="deploy",
-        payload={"task_id": task.id, "environment": "production", "promoted": True},
+        payload={
+            "task_id": task.id,
+            "environment": "production",
+            "promoted": True,
+            "production_url": launch.production_url if launch else None,
+        },
     )
     db.add(event)
+
+    # Audit: the actual promotion (not just task creation)
+    db.add(AuditLog(
+        launch_id=task.launch_id,
+        actor="engineering_agent",
+        action="deploy_promoted",
+        resource_type="launch_instance",
+        resource_id=task.launch_id,
+        details={
+            "task_id": task.id,
+            "production_url": launch.production_url if launch else None,
+        },
+    ))
+
     db.flush()
     return {"event_id": event.id, "production_url": launch.production_url if launch else None}
 

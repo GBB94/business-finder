@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     STRIPE_LIVE_SECRET_KEY: str = ""
     STRIPE_LIVE_PUBLISHABLE_KEY: str = ""
     NEON_API_KEY: str = ""
+    GITHUB_TOKEN: str = ""           # GitHub PAT for repo creation and branch management
+    GITHUB_ORG: str = ""             # GitHub org or user for new repos (e.g. "GBB94")
+    GITHUB_TEMPLATE_REPO: str = ""   # Template repo (e.g. "GBB94/launchpad-template")
+    RENDER_API_KEY: str = ""         # Render API key for service management
+    RENDER_OWNER_ID: str = ""        # Render owner/team ID for new services
     RESEND_SANDBOX_API_KEY: str = ""  # Resend sandbox key for preview deployments
     RESEND_WEBHOOK_SECRET: str = ""  # Resend webhook signing secret
     STRIPE_WEBHOOK_SECRET: str = ""  # Stripe webhook signing secret (whsec_...)

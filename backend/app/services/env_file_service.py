@@ -23,7 +23,7 @@ TASK_ENVIRONMENT_ACCESS: dict[str, set[str]] = {
     "provision": {"preview", "production"},   # writes both during setup
     "scaffold": {"preview"},
     "deploy": {"preview"},
-    "promote": {"preview", "production"},     # reads preview to copy into production
+    "promote": {"preview", "production"},     # reads production env to push to Render
     "metrics_collection": {"production"},
     "ceo_nightly": {"production"},
 }

@@ -201,7 +201,7 @@ async def promote_to_production(db: Session, task: AgentTask) -> dict:
     if step:
         start_step(db, step, input_data={"launch_id": launch_id})
 
-    _log_audit(db, launch_id, "deploy_promoted", "render_production", task.id, {
+    _log_audit(db, launch_id, "promotion_requested", "render_production", task.id, {
         "action": "promote_to_production",
     })
 
@@ -300,41 +300,139 @@ async def provision_project(db: Session, task: AgentTask) -> dict:
 
 
 async def _provision_github_repo(db: Session, task: AgentTask) -> dict:
-    """Stub: Create a GitHub repository for the project."""
+    """Create a GitHub repository from the golden path template."""
+    from app.services import github_service
+
     launch_id = task.launch_id
+    idea_name = (task.input_params or {}).get("idea_name", "")
     repo_name = f"launchpad-{launch_id[:8]}"
-    logger.info("STUB: Would create GitHub repo '%s' for launch=%s", repo_name, launch_id)
+
+    if not settings.GITHUB_TOKEN:
+        logger.warning("GITHUB_TOKEN not configured, returning stub for launch=%s", launch_id)
+        return {
+            "provider": "github",
+            "repo_name": repo_name,
+            "repo_url": f"https://github.com/{settings.GITHUB_ORG or 'org'}/{repo_name}",
+            "stub": True,
+        }
+
+    result = github_service.create_repo_from_template(
+        repo_name,
+        description=f"LaunchPad project: {idea_name}" if idea_name else "",
+    )
+
+    # Store repo URL on the launch instance for future reference
+    from app.models.launch_instance import LaunchInstance
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    if launch:
+        launch.github_repo_url = result["html_url"]
+        db.flush()
+
     return {
         "provider": "github",
         "repo_name": repo_name,
-        "repo_url": f"https://github.com/launchpad-projects/{repo_name}",
-        "stub": True,
+        "repo_url": result["html_url"],
+        "clone_url": result["clone_url"],
+        "full_name": result["full_name"],
     }
 
 
 async def _provision_neon_db(db: Session, task: AgentTask) -> dict:
-    """Stub: Create a Neon database for the project."""
+    """Create a Neon project with a preview branch for DB isolation.
+
+    Main branch = production. Preview branch = isolated preview environment.
+    Connection URIs for both are stored in the task output and used by
+    _provision_env_files to write per-environment .env files.
+    """
+    from app.services import neon_service
+
     launch_id = task.launch_id
-    db_name = f"launchpad_{launch_id[:8].replace('-', '_')}"
-    logger.info("STUB: Would create Neon DB '%s' for launch=%s", db_name, launch_id)
+    project_name = f"launchpad-{launch_id[:8]}"
+
+    if not settings.NEON_API_KEY:
+        logger.warning("NEON_API_KEY not configured, returning stub for launch=%s", launch_id)
+        db_slug = launch_id[:8].replace("-", "_")
+        return {
+            "provider": "neon",
+            "database_name": f"launchpad_{db_slug}",
+            "main_connection_uri": f"postgresql://user:pass@neon.tech/launchpad_{db_slug}",
+            "preview_connection_uri": f"postgresql://user:pass@neon.tech/launchpad_{db_slug}?options=endpoint%3Dbranch-preview",
+            "stub": True,
+        }
+
+    # Step 1: Create the Neon project (gets us the main branch)
+    project = neon_service.create_project(project_name)
+
+    # Step 2: Create a preview branch off main
+    branch = neon_service.create_branch(project["project_id"], "preview")
+
+    # Store Neon IDs on the launch for later use (env files, branch cleanup)
+    from app.models.launch_instance import LaunchInstance
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    if launch:
+        launch.neon_project_id = project["project_id"]
+        launch.neon_preview_branch_id = branch["branch_id"]
+        db.flush()
+
     return {
         "provider": "neon",
-        "database_name": db_name,
-        "connection_string": f"postgresql://user:pass@neon.tech/{db_name}",
-        "stub": True,
+        "project_id": project["project_id"],
+        "main_branch_id": project["main_branch_id"],
+        "main_connection_uri": project["main_connection_uri"],
+        "preview_branch_id": branch["branch_id"],
+        "preview_connection_uri": branch["connection_uri"],
     }
 
 
 async def _provision_render_service(db: Session, task: AgentTask) -> dict:
-    """Stub: Create a Render web service for the project."""
+    """Create a Render web service connected to the project's GitHub repo.
+
+    The service auto-deploys from the repo's default branch. Preview env
+    vars are set during creation; production credentials are swapped in
+    during the promote step.
+    """
+    from app.services import render_service
+
     launch_id = task.launch_id
     service_name = f"launchpad-{launch_id[:8]}"
-    logger.info("STUB: Would create Render service '%s' for launch=%s", service_name, launch_id)
+
+    if not settings.RENDER_API_KEY:
+        logger.warning("RENDER_API_KEY not configured, returning stub for launch=%s", launch_id)
+        return {
+            "provider": "render",
+            "service_name": service_name,
+            "preview_url": f"https://{service_name}.onrender.com",
+            "stub": True,
+        }
+
+    # Get the repo URL from the launch instance (set by _provision_github_repo)
+    from app.models.launch_instance import LaunchInstance
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    repo_url = launch.github_repo_url if launch else None
+
+    if not repo_url:
+        raise RuntimeError(
+            f"Cannot create Render service: GitHub repo URL not set on launch {launch_id}. "
+            f"Did the create_github_repo step succeed?"
+        )
+
+    result = render_service.create_web_service(
+        service_name,
+        repo_url,
+    )
+
+    # Store the service URL and ID on the launch
+    if launch:
+        launch.preview_url = result["service_url"]
+        # Store service_id in launch for later use (promote, env updates)
+        launch.render_service_id = result["service_id"]
+        db.flush()
+
     return {
         "provider": "render",
+        "service_id": result["service_id"],
         "service_name": service_name,
-        "preview_url": f"https://preview-{launch_id[:8]}.onrender.com",
-        "stub": True,
+        "preview_url": result["service_url"],
     }
 
 
@@ -366,18 +464,29 @@ async def _provision_env_files(db: Session, task: AgentTask) -> dict:
 
     Preview uses Neon branch DB, Stripe test keys, and Resend sandbox.
     Production uses Neon main branch, Stripe live keys, and Resend live.
-    Credentials are resolved centrally by env_file_service.resolve_credentials().
+
+    Connection URIs come from the provision_neon_db step's output (stored
+    in the AgentTaskStep). Falls back to stub URLs if not found.
     """
     launch_id = task.launch_id
     db_slug = launch_id[:8].replace("-", "_")
 
-    # Neon: preview uses a branch, production uses the main database.
-    # In production provisioning, _provision_neon_db would create the branch
-    # and return both connection strings. For now, the URL pattern shows intent.
-    preview_db_url = f"postgresql://user:pass@neon.tech/launchpad_{db_slug}?options=endpoint%3Dbranch-preview"
-    production_db_url = f"postgresql://user:pass@neon.tech/launchpad_{db_slug}"
+    # Pull real DB connection URIs from the Neon provisioning step
+    preview_db_url = None
+    production_db_url = None
+    for step in task.steps:
+        if step.step_name == "provision_neon_db" and step.output_data:
+            preview_db_url = step.output_data.get("preview_connection_uri")
+            production_db_url = step.output_data.get("main_connection_uri")
+            break
 
-    # Resolve provider credentials per environment
+    # Fallback to stub URLs if Neon step didn't produce real URIs
+    if not preview_db_url:
+        preview_db_url = f"postgresql://user:pass@neon.tech/launchpad_{db_slug}?options=endpoint%3Dbranch-preview"
+    if not production_db_url:
+        production_db_url = f"postgresql://user:pass@neon.tech/launchpad_{db_slug}"
+
+    # Resolve provider credentials per environment (Stripe, Resend)
     preview_creds = env_file_service.resolve_credentials("preview")
     production_creds = env_file_service.resolve_credentials("production")
 
