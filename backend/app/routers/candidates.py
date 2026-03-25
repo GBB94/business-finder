@@ -200,6 +200,18 @@ def _enqueue_candidate_scan(
     """Create a research job and enqueue a candidate scan."""
     queries = [candidate.problem_signal, candidate.target_audience]
 
+    idem_key = hashlib.sha256(
+        f"candidate_scan:{candidate.id}:{datetime.now(timezone.utc).date()}".encode()
+    ).hexdigest()
+
+    # Check for existing job with same idempotency key (same candidate, same day)
+    existing = db.query(ResearchJob).filter_by(idempotency_key=idem_key).first()
+    if existing:
+        if existing.status in ("queued", "running"):
+            return existing  # already in progress
+        if existing.status == "completed":
+            return existing  # already done today
+
     job = ResearchJob(
         id=str(uuid.uuid4()),
         user_id=user_id,
@@ -211,8 +223,8 @@ def _enqueue_candidate_scan(
             "queries": queries,
             "sources": ["hn", "reddit"],
         },
-        idempotency_key=hashlib.sha256(
-            f"candidate_scan:{candidate.id}:{datetime.now(timezone.utc).date()}".encode()
+        idempotency_key=idem_key if not existing else hashlib.sha256(
+            f"candidate_scan:{candidate.id}:{datetime.now(timezone.utc).isoformat()}".encode()
         ).hexdigest(),
     )
     db.add(job)

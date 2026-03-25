@@ -77,10 +77,6 @@ def run_reddit_purge() -> None:
             .all()
         )
 
-        if not reddit_evidence:
-            logger.info("Reddit purge: no Reddit evidence to check")
-            return
-
         logger.info("Reddit purge: checking %d evidence items", len(reddit_evidence))
 
         token = None

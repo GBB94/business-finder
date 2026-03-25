@@ -60,15 +60,17 @@ async def _run_discovery_pipeline(
         entry_posts: list[RawPost] = []
 
         if entry.source_type == "subreddit":
+            entry_rate_limits = 0
             for query in PAIN_SIGNAL_QUERIES:
                 posts = await reddit.search_subreddit(
                     entry.source_name, [query], limit=15
                 )
                 if posts is None:
-                    rate_limit_events += 1
+                    entry_rate_limits += 1
                 else:
                     entry_posts.extend(posts)
-            if rate_limit_events > len(PAIN_SIGNAL_QUERIES) // 2:
+            rate_limit_events += entry_rate_limits
+            if entry_rate_limits > len(PAIN_SIGNAL_QUERIES) // 2:
                 partial_entries.append(entry.source_name)
         else:
             # HN entry
@@ -76,11 +78,12 @@ async def _run_discovery_pipeline(
             posts = await hn.search(PAIN_SIGNAL_QUERIES, limit=50, tags=tags)
             entry_posts.extend(posts)
 
-        # Deduplicate across entries
+        # Deduplicate across entries. Keyed by bare source_id so
+        # create_candidate_from_cluster() can look up by the IDs
+        # Claude returns in source_post_ids.
         for p in entry_posts:
-            key = f"{p.source_type}:{p.source_id}"
-            if key not in post_map:
-                post_map[key] = p
+            if p.source_id not in post_map:
+                post_map[p.source_id] = p
                 all_posts.append(p)
 
         entry.last_scanned_at = datetime.now(timezone.utc)

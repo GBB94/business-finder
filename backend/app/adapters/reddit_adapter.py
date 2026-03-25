@@ -186,8 +186,12 @@ class RedditAdapter(SourceAdapter):
         subreddit: str,
         queries: list[str],
         limit: int = 25,
-    ) -> list[RawPost]:
-        """Search within a specific subreddit (restrict_sr=True)."""
+    ) -> list[RawPost] | None:
+        """Search within a specific subreddit (restrict_sr=True).
+
+        Returns None if every query was rate-limited out, indicating a
+        partial or failed scan for this subreddit.
+        """
         if self._use_mock:
             return self._mock_search(queries, limit)
         return await self._live_search_subreddit(subreddit, queries, limit)
@@ -197,10 +201,11 @@ class RedditAdapter(SourceAdapter):
         subreddit: str,
         queries: list[str],
         limit: int,
-    ) -> list[RawPost]:
+    ) -> list[RawPost] | None:
         posts: list[RawPost] = []
         seen_ids: set[str] = set()
         per_query = max(1, limit // len(queries)) if queries else limit
+        rate_limited_count = 0
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             token = await self._authenticate(client)
@@ -225,6 +230,7 @@ class RedditAdapter(SourceAdapter):
                     },
                 )
                 if resp is None:
+                    rate_limited_count += 1
                     continue
                 data = resp.json()
                 for child in data.get("data", {}).get("children", []):
@@ -246,6 +252,10 @@ class RedditAdapter(SourceAdapter):
                             created_utc=post.get("created_utc", 0),
                         )
                     )
+
+        # Return None if every query was rate-limited out
+        if rate_limited_count == len(queries):
+            return None
         return posts[:limit]
 
     async def _search_with_backoff(

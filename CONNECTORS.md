@@ -15,7 +15,7 @@
 - **Deletion compliance**: CandidateSourcePost records are checked by reddit_purge.py and fully purged when source posts are deleted. When last source post is purged, derived fields (evidence_summary, spending_signals, raw_themes) are nulled on the CandidateIdea.
 
 ### Hacker News (HN)
-- **Method**: Official Firebase API (public, no auth)
+- **Method**: Algolia Search API (public, no auth)
 - **Rate limits**: None published; use polite crawling (~1 req/sec)
 - **Terms**: Public API, no TOS restrictions on read access
 - **Data retention**: Store item IDs + metadata
