@@ -416,15 +416,28 @@ async def _provision_render_service(db: Session, task: AgentTask) -> dict:
             f"Did the create_github_repo step succeed?"
         )
 
+    # Pull preview DB URL from the Neon step output if available
+    preview_db_url = None
+    for step in task.steps:
+        if step.step_name == "provision_neon_db" and step.output_data:
+            preview_db_url = step.output_data.get("preview_connection_uri")
+            break
+
+    # Build preview env vars so the first Render deploy has credentials
+    preview_creds = env_file_service.resolve_credentials("preview")
+    render_env_vars = {**preview_creds, "NODE_ENV": "preview"}
+    if preview_db_url:
+        render_env_vars["DATABASE_URL"] = preview_db_url
+
     result = render_service.create_web_service(
         service_name,
         repo_url,
+        env_vars=render_env_vars,
     )
 
     # Store the service URL and ID on the launch
     if launch:
         launch.preview_url = result["service_url"]
-        # Store service_id in launch for later use (promote, env updates)
         launch.render_service_id = result["service_id"]
         db.flush()
 
@@ -433,6 +446,7 @@ async def _provision_render_service(db: Session, task: AgentTask) -> dict:
         "service_id": result["service_id"],
         "service_name": service_name,
         "preview_url": result["service_url"],
+        "env_keys_set": list(render_env_vars.keys()),
     }
 
 
@@ -504,10 +518,26 @@ async def _provision_env_files(db: Session, task: AgentTask) -> dict:
     preview_path = env_file_service.write_env_file(launch_id, "preview", preview_vars)
     production_path = env_file_service.write_env_file(launch_id, "production", production_vars)
 
+    # Sync preview env vars to Render if the service already exists.
+    # This ensures the Render deploy has the complete set of credentials
+    # even if _provision_render_service ran before this step.
+    render_synced = False
+    from app.models.launch_instance import LaunchInstance
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    if launch and launch.render_service_id and settings.RENDER_API_KEY:
+        try:
+            from app.services import render_service
+            render_service.update_env_vars(launch.render_service_id, preview_vars)
+            render_synced = True
+            logger.info("Synced preview env vars to Render for launch=%s", launch_id)
+        except Exception:
+            logger.exception("Failed to sync preview env vars to Render for launch=%s", launch_id)
+
     logger.info("Wrote env files for launch=%s", launch_id)
     return {
         "preview_env_path": preview_path,
         "production_env_path": production_path,
         "preview_keys": list(preview_vars.keys()),
         "production_keys": list(production_vars.keys()),
+        "render_synced": render_synced,
     }

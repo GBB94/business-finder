@@ -17,9 +17,11 @@ def upgrade() -> None:
     op.add_column("launch_instances", sa.Column("render_service_id", sa.String(100), nullable=True))
     op.add_column("launch_instances", sa.Column("neon_project_id", sa.String(100), nullable=True))
     op.add_column("launch_instances", sa.Column("neon_preview_branch_id", sa.String(100), nullable=True))
+    op.add_column("launch_instances", sa.Column("working_branch", sa.String(100), nullable=True))
 
 
 def downgrade() -> None:
+    op.drop_column("launch_instances", "working_branch")
     op.drop_column("launch_instances", "neon_preview_branch_id")
     op.drop_column("launch_instances", "neon_project_id")
     op.drop_column("launch_instances", "render_service_id")

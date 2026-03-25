@@ -17,7 +17,7 @@ class AuditLog(Base):
     actor = Column(String(50), nullable=False)  # system, ceo_agent, engineering_agent, marketing_agent, support_agent, founder
     action = Column(String(50), nullable=False)  # approval_granted, approval_rejected, secret_accessed, deploy_promoted, project_paused, project_resumed, project_killed, budget_changed, manual_override, provider_mutation, task_created, task_failed
     resource_type = Column(String(50), nullable=True)
-    resource_id = Column(String(36), nullable=True)
+    resource_id = Column(String(255), nullable=True)
     details = Column(JSON, nullable=True)
     ip_address = Column(String(45), nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

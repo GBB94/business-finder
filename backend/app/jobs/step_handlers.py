@@ -618,10 +618,24 @@ def handle_scaffold_generate(db: Session, task: AgentTask, step: AgentTaskStep, 
 
 
 def handle_scaffold_commit(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Commit generated code to a branch. Stub."""
+    """Commit generated code to a branch. Stub.
+
+    Persists the branch name on the LaunchInstance so the promote step
+    knows which branch to merge into main.
+    """
+    from app.models.launch_instance import LaunchInstance
+
     launch_id = task.launch_id
-    logger.info("STUB: Would commit scaffold to branch for launch=%s", launch_id)
-    return {"status": "committed", "branch": f"scaffold-{launch_id[:8]}", "stub": True}
+    branch_name = f"scaffold-{launch_id[:8]}"
+
+    # Store the working branch on the launch so promote can find it
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    if launch:
+        launch.working_branch = branch_name
+        db.flush()
+
+    logger.info("STUB: Would commit scaffold to branch '%s' for launch=%s", branch_name, launch_id)
+    return {"status": "committed", "branch": branch_name, "stub": True}
 
 
 def handle_scaffold_trigger_build(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
@@ -810,8 +824,17 @@ def handle_promote_merge(db: Session, task: AgentTask, step: AgentTaskStep, inpu
     # Extract full_name from URL (e.g. "https://github.com/GBB94/launchpad-abc123" -> "GBB94/launchpad-abc123")
     repo_full_name = "/".join(launch.github_repo_url.rstrip("/").split("/")[-2:])
 
-    # The working branch name is in input_params, defaulting to "preview"
-    head_branch = (task.input_params or {}).get("branch", "preview")
+    # Read the working branch from the launch (set by scaffold commit step).
+    # Fall back to input_params for manual overrides.
+    head_branch = (
+        launch.working_branch
+        or (task.input_params or {}).get("branch")
+    )
+    if not head_branch:
+        raise RuntimeError(
+            f"Cannot promote launch {task.launch_id}: no working_branch set. "
+            f"Did the scaffold commit step run?"
+        )
 
     result = github_service.merge_branch(
         repo_full_name,

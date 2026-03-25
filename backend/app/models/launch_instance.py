@@ -23,6 +23,7 @@ class LaunchInstance(Base):
     render_service_id = Column(String(100), nullable=True)  # Render service ID for env updates and deploys
     neon_project_id = Column(String(100), nullable=True)     # Neon project ID for branch management
     neon_preview_branch_id = Column(String(100), nullable=True)  # Neon preview branch ID
+    working_branch = Column(String(100), nullable=True)  # Git branch name for scaffold/deploy (e.g. "scaffold-abc12345")
     daily_budget_cap = Column(Float, nullable=True)
     total_spend_to_date = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
