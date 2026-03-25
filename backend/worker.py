@@ -18,6 +18,7 @@ def main():
         Queue("ceo", connection=conn),
         Queue("marketing", connection=conn),
         Queue("support", connection=conn),
+        Queue("discovery", connection=conn),
     ]
     worker = Worker(queues, connection=conn)
     worker.work()

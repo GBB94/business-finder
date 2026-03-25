@@ -15,10 +15,17 @@ ALGOLIA_SEARCH_URL = "https://hn.algolia.com/api/v1/search"
 class HNAdapter(SourceAdapter):
     source_type = "hn"
 
+    # Algolia tag values for each watchlist source_type
+    TAG_MAP: dict[str, str] = {
+        "hn_ask": "ask_hn",
+        "hn_show": "show_hn",
+        "hn_tag": "story",
+    }
+
     def __init__(self) -> None:
         self._rate_delay = 1.0  # seconds between requests
 
-    async def search(self, queries: list[str], limit: int = 25) -> list[RawPost]:
+    async def search(self, queries: list[str], limit: int = 25, tags: str = "story") -> list[RawPost]:
         posts: list[RawPost] = []
         seen_ids: set[str] = set()
         per_query = max(1, limit // len(queries)) if queries else limit
@@ -32,7 +39,7 @@ class HNAdapter(SourceAdapter):
                         ALGOLIA_SEARCH_URL,
                         params={
                             "query": query,
-                            "tags": "story",
+                            "tags": tags,
                             "hitsPerPage": per_query,
                         },
                     )

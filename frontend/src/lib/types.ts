@@ -529,3 +529,91 @@ export interface AgentTaskListResponse {
   items: AgentTask[];
   total: number;
 }
+
+// Discovery Pipeline types
+export type WatchlistSourceType = "subreddit" | "hn_ask" | "hn_show" | "hn_tag";
+export type CandidateStatus = "pending_review" | "promoted" | "dismissed";
+export type CandidateSource = "scanner" | "founder_suggestion";
+export type PainType =
+  | "pricing_friction"
+  | "missing_feature"
+  | "workflow_friction"
+  | "tool_switching"
+  | "manual_process"
+  | "information_gap"
+  | "other";
+export type CompetitionSignal = "crowded" | "active" | "sparse" | "unknown";
+export type DismissReason =
+  | "not_my_audience"
+  | "too_crowded"
+  | "pain_too_weak"
+  | "already_have_idea"
+  | "resurface_later"
+  | "other";
+
+export interface WatchlistEntry {
+  id: string;
+  user_id: string;
+  source_type: WatchlistSourceType;
+  source_name: string;
+  description: string | null;
+  active: boolean;
+  scan_frequency_days: number;
+  last_scanned_at: string | null;
+  created_at: string;
+}
+
+export interface WatchlistEntryListResponse {
+  items: WatchlistEntry[];
+  total: number;
+}
+
+export interface CandidateSourcePost {
+  id: string;
+  source_id: string;
+  source_type: string;
+  source_url: string;
+  subreddit: string | null;
+  title: string;
+  relevance_score: number | null;
+  engagement_score: number;
+  sentiment: string | null;
+  content_purged: boolean;
+  ingested_at: string;
+}
+
+export interface CandidateIdea {
+  id: string;
+  user_id: string;
+  source: CandidateSource;
+  status: CandidateStatus;
+  problem_signal: string;
+  target_audience: string;
+  pain_intensity_score: number | null;
+  pain_type: PainType | null;
+  evidence_summary: string | null;
+  source_communities: string[] | null;
+  cross_community: boolean;
+  spending_signals: string[] | null;
+  competitor_mentions: string[] | null;
+  competition_signal: CompetitionSignal | null;
+  raw_themes: string[] | null;
+  sample_post_count: number;
+  prompt_version: string | null;
+  model_version: string | null;
+  founder_note: string | null;
+  suggested_solution: string | null;
+  scan_job_id: string | null;
+  promoted_idea_id: string | null;
+  review_note: string | null;
+  dismiss_reason: DismissReason | null;
+  derived_content_purged: boolean;
+  reviewed_at: string | null;
+  created_at: string;
+  source_posts?: CandidateSourcePost[];
+}
+
+export interface CandidateListResponse {
+  items: CandidateIdea[];
+  total: number;
+}

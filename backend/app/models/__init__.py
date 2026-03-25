@@ -18,6 +18,9 @@ from app.models.daily_log import DailyLog
 from app.models.approval_grant import ApprovalGrant
 from app.models.project_metrics_daily import ProjectMetricsDaily
 from app.models.support_thread import SupportThread
+from app.models.watchlist_entry import WatchlistEntry
+from app.models.candidate_idea import CandidateIdea
+from app.models.candidate_source_post import CandidateSourcePost
 
 __all__ = [
     "User",
@@ -40,4 +43,7 @@ __all__ = [
     "ApprovalGrant",
     "ProjectMetricsDaily",
     "SupportThread",
+    "WatchlistEntry",
+    "CandidateIdea",
+    "CandidateSourcePost",
 ]

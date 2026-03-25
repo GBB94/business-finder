@@ -15,6 +15,8 @@ import httpx
 from app.config import settings
 from app.database import SessionLocal
 from app.models.evidence import Evidence, SourceType
+from app.models.candidate_idea import CandidateIdea
+from app.models.candidate_source_post import CandidateSourcePost
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -161,11 +163,82 @@ def run_reddit_purge() -> None:
                 )
                 purged_count += 1
 
+        # ── Pass 2: CandidateSourcePost ──────────────────────────────
+        candidate_posts = (
+            db.query(CandidateSourcePost)
+            .filter_by(source_type="reddit", content_purged=False)
+            .all()
+        )
+
+        purged_candidates: set[str] = set()
+        for cp in candidate_posts:
+            post_id = cp.source_id
+            if not post_id:
+                continue
+            try:
+                if token:
+                    resp = client.get(
+                        f"https://oauth.reddit.com/api/info?id=t3_{post_id}",
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "User-Agent": settings.REDDIT_USER_AGENT,
+                        },
+                    )
+                else:
+                    resp = client.get(
+                        f"https://www.reddit.com/api/info.json?id=t3_{post_id}",
+                        headers={"User-Agent": settings.REDDIT_USER_AGENT},
+                    )
+
+                if resp.status_code == 404:
+                    cp.content_purged = True
+                    cp.purge_reason = "Source post returned 404 (deleted)"
+                    purged_count += 1
+                    purged_candidates.add(cp.candidate_id)
+                    continue
+
+                resp.raise_for_status()
+                data = resp.json()
+                children = data.get("data", {}).get("children", [])
+                if not children:
+                    cp.content_purged = True
+                    cp.purge_reason = "Source post no longer exists in Reddit API"
+                    purged_count += 1
+                    purged_candidates.add(cp.candidate_id)
+                    continue
+
+                post_data = children[0].get("data", {})
+                if _is_deleted(post_data):
+                    cp.content_purged = True
+                    cp.purge_reason = "Source content deleted per Reddit Data API Terms"
+                    purged_count += 1
+                    purged_candidates.add(cp.candidate_id)
+
+            except Exception:
+                logger.exception("Reddit purge: failed to check candidate post %s", post_id)
+
+        # ── Pass 3: Null derived fields on candidates whose last source was purged ─
+        for candidate_id in purged_candidates:
+            remaining = (
+                db.query(CandidateSourcePost)
+                .filter_by(candidate_id=candidate_id, content_purged=False)
+                .count()
+            )
+            if remaining == 0:
+                candidate = db.query(CandidateIdea).filter_by(id=candidate_id).first()
+                if candidate and not candidate.derived_content_purged:
+                    candidate.evidence_summary = None
+                    candidate.spending_signals = None
+                    candidate.raw_themes = None
+                    candidate.derived_content_purged = True
+
         db.commit()
         logger.info(
-            "Reddit purge complete: %d items purged, %d ideas need report recompute",
+            "Reddit purge complete: %d items purged, %d ideas need report recompute, "
+            "%d candidate sources checked",
             purged_count,
             len(ideas_needing_recompute),
+            len(candidate_posts),
         )
 
     except Exception:

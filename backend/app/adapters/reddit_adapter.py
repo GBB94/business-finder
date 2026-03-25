@@ -181,6 +181,104 @@ class RedditAdapter(SourceAdapter):
 
         return posts[:limit]
 
+    async def search_subreddit(
+        self,
+        subreddit: str,
+        queries: list[str],
+        limit: int = 25,
+    ) -> list[RawPost]:
+        """Search within a specific subreddit (restrict_sr=True)."""
+        if self._use_mock:
+            return self._mock_search(queries, limit)
+        return await self._live_search_subreddit(subreddit, queries, limit)
+
+    async def _live_search_subreddit(
+        self,
+        subreddit: str,
+        queries: list[str],
+        limit: int,
+    ) -> list[RawPost]:
+        posts: list[RawPost] = []
+        seen_ids: set[str] = set()
+        per_query = max(1, limit // len(queries)) if queries else limit
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            token = await self._authenticate(client)
+
+            for i, query in enumerate(queries):
+                if i > 0:
+                    await asyncio.sleep(1.0)
+                resp = await self._search_with_backoff(
+                    client,
+                    url=f"https://oauth.reddit.com/r/{subreddit}/search",
+                    params={
+                        "q": query,
+                        "restrict_sr": "true",
+                        "sort": "relevance",
+                        "t": "month",
+                        "limit": per_query,
+                        "type": "link",
+                    },
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "User-Agent": settings.REDDIT_USER_AGENT,
+                    },
+                )
+                if resp is None:
+                    continue
+                data = resp.json()
+                for child in data.get("data", {}).get("children", []):
+                    post = child.get("data", {})
+                    pid = post.get("id", "")
+                    if pid in seen_ids:
+                        continue
+                    seen_ids.add(pid)
+                    posts.append(
+                        RawPost(
+                            source_id=pid,
+                            source_type="reddit",
+                            source_url=f"https://reddit.com{post.get('permalink', '')}",
+                            title=post.get("title", ""),
+                            body=(post.get("selftext", "") or "")[:3000],
+                            score=post.get("score", 0),
+                            comment_count=post.get("num_comments", 0),
+                            subreddit=post.get("subreddit", subreddit),
+                            created_utc=post.get("created_utc", 0),
+                        )
+                    )
+        return posts[:limit]
+
+    async def _search_with_backoff(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict,
+        headers: dict,
+        attempt: int = 0,
+    ) -> httpx.Response | None:
+        """Execute a search request with exponential backoff on 429."""
+        _MAX_ATTEMPTS = 3
+        _BACKOFF_SECONDS = [5, 15, 45]
+        try:
+            resp = await client.get(url, params=params, headers=headers)
+            if resp.status_code == 429:
+                if attempt >= _MAX_ATTEMPTS:
+                    logger.warning("Rate limit: max retries exceeded for %s", url)
+                    return None
+                delay = _BACKOFF_SECONDS[attempt]
+                logger.info("Rate limit 429: backing off %ds (attempt %d)", delay, attempt + 1)
+                await asyncio.sleep(delay)
+                return await self._search_with_backoff(
+                    client, url, params, headers, attempt + 1
+                )
+            resp.raise_for_status()
+            return resp
+        except httpx.HTTPStatusError:
+            raise
+        except Exception:
+            logger.exception("Search request failed for %s", url)
+            return None
+
     @staticmethod
     def _to_raw_post(mock: dict) -> RawPost:
         return RawPost(

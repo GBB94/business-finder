@@ -13,6 +13,7 @@ from app.database import Base
 
 class JobType(str, enum.Enum):
     community_scan = "community_scan"
+    discovery_scan = "discovery_scan"
 
 
 class JobStatus(str, enum.Enum):

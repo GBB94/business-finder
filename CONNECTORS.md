@@ -3,11 +3,16 @@
 ## Automated Connectors (API-compliant)
 
 ### Reddit
-- **Method**: Official API via PRAW (OAuth2)
-- **Rate limits**: 100 requests/minute
+- **Method**: Official API via OAuth2
+- **Rate limits**: 100 requests/minute per OAuth client ID
 - **Terms**: Compliant with Reddit API Terms of Use
 - **Data retention**: Store post IDs + metadata only; content summarized, not cached verbatim
-- **Last verified**: 2026-03-03
+- **Last verified**: 2026-03-25
+
+#### Reddit Data API -- Discovery Scanner
+- **Status**: Personal/non-commercial use (free tier, 100 QPM per OAuth client ID)
+- **CRITICAL**: Commercial use (any monetized product or added users) requires a contract with Reddit. Pricing negotiated, not publicly listed. Re-evaluate before any productization milestone.
+- **Deletion compliance**: CandidateSourcePost records are checked by reddit_purge.py and fully purged when source posts are deleted. When last source post is purged, derived fields (evidence_summary, spending_signals, raw_themes) are nulled on the CandidateIdea.
 
 ### Hacker News (HN)
 - **Method**: Official Firebase API (public, no auth)
