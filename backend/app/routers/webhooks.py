@@ -202,8 +202,12 @@ async def resend_webhook(
     if not is_duplicate:
         logger.info("Created %s event for launch=%s from Resend webhook", mapped_type, launch_id)
 
-        # Critical events (bounces) trigger an immediate CEO evaluation
+        # Bounces: check bounce rate and pause outbound if threshold exceeded,
+        # then trigger an immediate CEO evaluation
         if mapped_type == "email_bounced":
+            from app.services.bounce_detector import check_and_pause
+            check_and_pause(db, launch_id)
+
             from app.services.interrupt_emitter import trigger_and_enqueue
             trigger_and_enqueue(db, launch_id, mapped_type)
 

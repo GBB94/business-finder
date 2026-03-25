@@ -282,6 +282,25 @@ def update_launch(
     return _to_response(launch, db)
 
 
+# ── Outbound pause management ──────────────────────────────────────────────
+
+@router.post("/{launch_id}/unpause-outbound", status_code=200)
+def unpause_outbound(
+    launch_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Manually unpause outbound email for a project after bounce rate review."""
+    _get_launch_or_404(launch_id, current_user.id, db)
+
+    from app.services.bounce_detector import unpause_outbound as do_unpause
+    was_paused = do_unpause(db, launch_id)
+    if not was_paused:
+        raise HTTPException(400, "Outbound email is not currently paused for this project")
+
+    return {"ok": True, "launch_id": launch_id, "outbound_paused": False}
+
+
 # ── Sub-resources ───────────────────────────────────────────────────────────
 
 @router.get("/{launch_id}/events", response_model=OperationalEventListResponse)

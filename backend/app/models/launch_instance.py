@@ -24,6 +24,8 @@ class LaunchInstance(Base):
     neon_project_id = Column(String(100), nullable=True)     # Neon project ID for branch management
     neon_preview_branch_id = Column(String(100), nullable=True)  # Neon preview branch ID
     working_branch = Column(String(100), nullable=True)  # Git branch name for scaffold/deploy (e.g. "scaffold-abc12345")
+    outbound_paused_at = Column(DateTime, nullable=True)  # Set when bounce rate exceeds threshold; blocks all outbound email
+    outbound_pause_reason = Column(String(500), nullable=True)
     daily_budget_cap = Column(Float, nullable=True)
     total_spend_to_date = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

@@ -1102,7 +1102,14 @@ def handle_ceo_log(db: Session, task: AgentTask, step: AgentTaskStep, input_data
 
 
 def handle_marketing_check_budget(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Enforce per-project daily and cross-project monthly budget before marketing spend."""
+    """Enforce outbound pause and budget before marketing spend.
+
+    Checks two gates in order:
+    1. Outbound pause: if the project's bounce rate exceeded the threshold,
+       all outbound email is blocked until manually unpaused.
+    2. Budget: per-project daily and cross-project monthly caps.
+    """
+    from app.services.bounce_detector import is_outbound_paused
     from app.services.budget_service import enforce_budget, BudgetExceeded
 
     launch_id = task.launch_id
@@ -1110,9 +1117,21 @@ def handle_marketing_check_budget(db: Session, task: AgentTask, step: AgentTaskS
     if not launch_id:
         raise ValueError("Marketing tasks require a launch_id")
 
+    # Gate 1: bounce rate pause
+    if is_outbound_paused(db, launch_id):
+        from app.models.launch_instance import LaunchInstance
+        launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+        reason = launch.outbound_pause_reason if launch else "unknown"
+        raise RuntimeError(
+            f"Outbound email is paused for this project: {reason}. "
+            f"Review bounce logs and unpause from the dashboard before retrying."
+        )
+
+    # Gate 2: budget enforcement
     result = enforce_budget(db, launch_id, user_id)
     return {
         "budget_ok": True,
+        "outbound_paused": False,
         "daily_remaining_cents": result["daily"]["remaining_cents"],
         "monthly_remaining_cents": result["monthly"]["remaining_cents"],
     }
