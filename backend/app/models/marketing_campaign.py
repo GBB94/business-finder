@@ -73,3 +73,9 @@ class MarketingCampaign(Base):
     updated_at = Column(DateTime, nullable=True, onupdate=lambda: datetime.now(timezone.utc))
 
     prospects = relationship("CampaignProspect", back_populates="campaign", cascade="all, delete-orphan")
+
+    @property
+    def reply_rate(self) -> float:
+        if not self.total_sent:
+            return 0.0
+        return round(self.total_replied / self.total_sent, 4)
