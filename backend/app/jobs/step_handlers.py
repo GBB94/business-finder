@@ -1282,7 +1282,7 @@ def handle_provision_smartlead_mailbox(db: Session, task: AgentTask, step: Agent
         raise ValueError("Provision task requires an idea_id")
 
     # Read SMTP credentials from project secrets
-    env = (task.input_params or {}).get("environment", "prod")
+    env = (task.input_params or {}).get("environment", "production")
 
     def _get_secret(key: str) -> str:
         secret = (
@@ -1341,7 +1341,7 @@ def handle_provision_shellmail_inbox(db: Session, task: AgentTask, step: AgentTa
     if not idea_id:
         raise ValueError("Provision task requires an idea_id")
 
-    env = (task.input_params or {}).get("environment", "prod")
+    env = (task.input_params or {}).get("environment", "production")
     project_name = (task.input_params or {}).get("project_name", f"project-{idea_id[:8]}")
     domain = app_settings.SENDING_ROOT_DOMAIN or "mail.example.com"
     inbox_address = f"support@{project_name}.{domain}"
@@ -1886,12 +1886,13 @@ def handle_support_parse_inbound(db: Session, task: AgentTask, step: AgentTaskSt
     subject = params.get("subject", "")
     body = params.get("body", "")
     message_id = params.get("message_id")
+    shellmail_thread_id = params.get("shellmail_thread_id")
 
     if not customer_email or not body:
         raise ValueError("triage_inbox requires customer_email and body in input_params")
 
     thread = get_or_create_thread(db, task.launch_id, customer_email, subject)
-    add_message_to_thread(db, thread, "inbound", body, message_id)
+    add_message_to_thread(db, thread, "inbound", body, message_id, shellmail_thread_id=shellmail_thread_id)
 
     return {
         "thread_id": thread.id,

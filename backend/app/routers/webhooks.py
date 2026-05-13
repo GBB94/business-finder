@@ -477,6 +477,9 @@ async def smartlead_webhook(
                 "campaign_id": sl_campaign_id,
                 "lead_email": data.get("email") or data.get("to_email") or "",
                 "lead_id": data.get("lead_id"),
+                "message_id": data.get("id") or data.get("message_id"),
+                "reply_text": (data.get("reply_text") or data.get("body") or data.get("message") or "")[:5000],
+                "subject": data.get("subject") or "",
             },
         )
         db.add(event)
@@ -752,6 +755,7 @@ async def shellmail_webhook(
                 "subject": data.get("subject") or "",
                 "body": data.get("text") or data.get("html") or data.get("body") or "",
                 "message_id": data.get("id") or data.get("message_id") or "",
+                "shellmail_thread_id": data.get("thread_id") or data.get("id") or "",
                 "source_provider": "shellmail",
             },
         )

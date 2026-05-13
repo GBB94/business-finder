@@ -87,7 +87,8 @@ DEFAULT_STEPS: dict[str, list[str]] = {
     "consistency_check": ["gather_scores", "run_check", "store_result"],
     "review_summary": ["gather_metrics", "generate_summary", "store_result"],
     # LaunchPad tasks
-    "provision": ["create_github_repo", "provision_neon_db", "configure_render", "setup_resend", "create_stripe_product", "write_env_files", "setup_smartlead_mailbox", "setup_shellmail_inbox"],
+    "provision": ["create_github_repo", "provision_neon_db", "configure_render", "setup_resend", "create_stripe_product", "write_env_files"],
+    "provision_marketing": ["setup_smartlead_mailbox", "setup_shellmail_inbox"],
     "scaffold": ["generate_code", "commit_to_branch", "trigger_preview_build"],
     "deploy": ["push_to_preview", "run_smoke_tests", "record_deploy_event"],
     "promote": ["check_approval", "merge_to_main", "swap_env", "record_promotion"],

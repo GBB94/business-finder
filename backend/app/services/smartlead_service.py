@@ -260,6 +260,21 @@ async def get_unread_replies(
     return [r for r in data if not r.get("is_read")]
 
 
+async def send_reply(campaign_id: int, lead_email: str, body: str, *, message_id: str | None = None) -> dict:
+    """Send an in-thread reply to a lead via Smartlead."""
+    payload: dict[str, Any] = {
+        "email": lead_email,
+        "body": body,
+    }
+    if message_id:
+        payload["message_id"] = message_id
+    return await _request(
+        "POST",
+        f"/campaigns/{campaign_id}/reply",
+        json=payload,
+    )
+
+
 async def mark_reply_read(reply_id: int) -> None:
     """Mark a reply as read in Smartlead."""
     await _request("POST", f"/replies/{reply_id}/mark-read")

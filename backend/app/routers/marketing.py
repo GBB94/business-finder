@@ -503,10 +503,12 @@ def promote_reply(
     evidence = Evidence(
         idea_id=launch.idea_id,
         user_id=current_user.id,
-        evidence_type=body.evidence_type,
-        source="smartlead_reply",
-        content=reply_text[:5000],
-        notes=body.notes or f"Campaign reply from {from_email}",
+        gate="discovery",
+        evidence_type="outreach_metric",
+        title=f"Campaign reply from {from_email}",
+        content={"reply_text": reply_text[:5000], "from_email": from_email, "notes": body.notes},
+        source_type="other",
+        sentiment="positive",
     )
     db.add(evidence)
 
@@ -553,17 +555,26 @@ def reply_to_prospect(
     if not sl_campaign_id or not lead_email:
         raise HTTPException(400, "Reply event missing campaign_id or lead email")
 
-    # Find the Smartlead message/thread ID from the payload
     message_id = payload.get("message_id") or payload.get("id")
-    if not message_id:
-        raise HTTPException(400, "Reply event missing message identifier")
 
-    # Smartlead reply is sent via their API
+    # Send the actual reply through Smartlead
     try:
-        # Use the master inbox reply endpoint
-        asyncio.run(sl.mark_reply_read(int(message_id)))
+        asyncio.run(sl.send_reply(
+            campaign_id=int(sl_campaign_id),
+            lead_email=lead_email,
+            body=body.body,
+            message_id=message_id,
+        ))
     except Exception:
-        logger.exception("Failed to mark reply as read on Smartlead")
+        logger.exception("Failed to send Smartlead reply for event %s", event_id)
+        raise HTTPException(502, "Failed to send reply via Smartlead")
+
+    # Mark original as read (best-effort)
+    if message_id:
+        try:
+            asyncio.run(sl.mark_reply_read(int(message_id)))
+        except Exception:
+            logger.warning("Failed to mark reply %s as read", message_id)
 
     # Log the outbound reply as an OperationalEvent
     db.add(OperationalEvent(

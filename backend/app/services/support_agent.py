@@ -227,15 +227,19 @@ def add_message_to_thread(
     direction: str,
     body: str,
     message_id: str | None = None,
+    shellmail_thread_id: str | None = None,
 ) -> SupportThread:
     """Append a message to the thread."""
     messages = list(thread.messages or [])
-    messages.append({
+    msg: dict = {
         "direction": direction,
         "body": body,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "message_id": message_id,
-    })
+    }
+    if shellmail_thread_id:
+        msg["shellmail_thread_id"] = shellmail_thread_id
+    messages.append(msg)
     thread.messages = messages
     thread.message_count = len(messages)
     thread.updated_at = datetime.now(timezone.utc)
