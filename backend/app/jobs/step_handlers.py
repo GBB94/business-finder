@@ -1440,7 +1440,7 @@ def handle_activate_bind_mailbox(db: Session, task: AgentTask, step: AgentTaskSt
         raise ValueError(f"Campaign {campaign_id} not found")
 
     idea_id = task.idea_id or campaign.idea_id
-    env = params.get("environment", "prod")
+    env = params.get("environment", "production")
 
     # Load SMARTLEAD_EMAIL_ACCOUNT_ID from project secrets
     secret = (
@@ -2304,4 +2304,7 @@ HANDLER_REGISTRY: dict[tuple[str, str], object] = {
     ("check_escalations", "scan_threads"): handle_support_scan_threads,
     ("check_escalations", "flag_breaches"): handle_support_flag_breaches,
     ("check_escalations", "notify_founder"): handle_support_notify_founder,
+    # Marketing: provision_marketing (separate from core provision)
+    ("provision_marketing", "setup_smartlead_mailbox"): handle_provision_smartlead_mailbox,
+    ("provision_marketing", "setup_shellmail_inbox"): handle_provision_shellmail_inbox,
 }

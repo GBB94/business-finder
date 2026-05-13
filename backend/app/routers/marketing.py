@@ -24,6 +24,7 @@ from app.models.marketing_campaign import MarketingCampaign
 from app.models.user import User
 from app.schemas.marketing import (
     CampaignActivate,
+    CampaignChecklistUpdate,
     CampaignCreate,
     CampaignCreateResult,
     CampaignDetailResponse,
@@ -267,6 +268,38 @@ def resume_campaign(
             raise HTTPException(502, "Failed to resume campaign on Smartlead. Local status unchanged.")
 
     campaign.status = "active"
+    db.commit()
+    db.refresh(campaign)
+    return CampaignResponse.model_validate(campaign)
+
+
+# ---------------------------------------------------------------------------
+# Compliance checklist
+# ---------------------------------------------------------------------------
+
+
+@router.patch("/api/launches/{launch_id}/marketing/campaigns/{campaign_id}/checklist", response_model=CampaignResponse)
+def update_campaign_checklist(
+    launch_id: str,
+    campaign_id: str,
+    body: CampaignChecklistUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Update compliance checklist flags on a campaign."""
+    _get_launch(db, launch_id, current_user.id)
+    campaign = (
+        db.query(MarketingCampaign)
+        .filter_by(id=campaign_id, launch_id=launch_id, user_id=current_user.id)
+        .first()
+    )
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(campaign, field, value)
+
     db.commit()
     db.refresh(campaign)
     return CampaignResponse.model_validate(campaign)

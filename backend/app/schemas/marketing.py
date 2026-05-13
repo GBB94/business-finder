@@ -120,6 +120,18 @@ class CampaignResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CampaignChecklistUpdate(BaseModel):
+    dns_authenticated: Optional[bool] = None
+    dmarc_policy: Optional[bool] = None
+    domain_warmup_complete: Optional[bool] = None
+    list_unsubscribe_header_active: Optional[bool] = None
+    commercial_ad_disclosure_present: Optional[bool] = None
+    physical_address_included: Optional[bool] = None
+    unsubscribe_link_verified: Optional[bool] = None
+    audience_type_confirmed: Optional[bool] = None
+    suppression_list_screened: Optional[bool] = None
+
+
 class CampaignDetailResponse(CampaignResponse):
     prospects: list[ProspectResponse] = []
 
