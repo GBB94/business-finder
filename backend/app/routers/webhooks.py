@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import logging
 import time
+from datetime import datetime, timezone
 
 import redis
 from fastapi import APIRouter, Header, HTTPException, Request, Depends
@@ -378,3 +379,392 @@ async def stripe_webhook(
     trigger_and_enqueue(db, launch_id, "error")
 
     return {"status": "processed", "event_type": event_type, "event_id": event.id}
+
+
+# ---------------------------------------------------------------------------
+# Smartlead webhook
+# ---------------------------------------------------------------------------
+
+_SMARTLEAD_EVENT_MAP: dict[str, str] = {
+    "EMAIL_SENT": "email_sent",
+    "EMAIL_OPENED": "email_opened",
+    "EMAIL_REPLIED": "email_replied",
+    "EMAIL_BOUNCED": "email_bounced",
+    "EMAIL_UNSUBSCRIBED": "email_unsubscribed",
+    "LEAD_CATEGORY_UPDATED": "lead_status_changed",
+    "SPAM_COMPLAINT": "email_bounced",  # treat complaints as bounces for suppression
+}
+
+
+def _verify_smartlead_signature(body: bytes, signature: str | None) -> None:
+    """Verify Smartlead webhook HMAC-SHA256 signature."""
+    if not settings.SMARTLEAD_WEBHOOK_SECRET:
+        raise HTTPException(503, "Smartlead webhook secret not configured")
+    if not signature:
+        raise HTTPException(401, "Missing X-Smartlead-Signature header")
+
+    expected = hmac.new(
+        settings.SMARTLEAD_WEBHOOK_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(401, "Invalid Smartlead signature")
+
+
+@router.post("/smartlead", status_code=200)
+async def smartlead_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_smartlead_signature: str | None = Header(None, alias="x-smartlead-signature"),
+):
+    body = await request.body()
+    _verify_smartlead_signature(body, x_smartlead_signature)
+
+    payload = await request.json()
+    event_type = payload.get("event_type", "")
+    mapped_type = _SMARTLEAD_EVENT_MAP.get(event_type)
+
+    if not mapped_type:
+        return {"status": "ignored", "event_type": event_type}
+
+    data = payload.get("data") or payload
+    sl_event_id = payload.get("event_id") or payload.get("id") or ""
+
+    # Resolve launch_id from campaign
+    sl_campaign_id = str(data.get("campaign_id") or data.get("seq_id") or "")
+    launch_id = None
+    if sl_campaign_id:
+        from app.models.marketing_campaign import MarketingCampaign
+        campaign = (
+            db.query(MarketingCampaign)
+            .filter_by(provider_campaign_id=sl_campaign_id)
+            .first()
+        )
+        if campaign:
+            launch_id = campaign.launch_id
+
+    if not launch_id:
+        logger.warning("Smartlead webhook %s: no launch_id resolvable from campaign %s", event_type, sl_campaign_id)
+        return {"status": "skipped", "reason": "no_launch_id"}
+
+    # Verify launch exists
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    if not launch:
+        return {"status": "skipped", "reason": "unknown_launch"}
+
+    # Deduplicate — only skip the OperationalEvent INSERT, never skip side effects
+    provider_event_id = f"sl:{sl_event_id}" if sl_event_id else None
+    is_duplicate = False
+    event_id = None
+
+    if provider_event_id:
+        existing = _dedupe_by_provider_event_id(db, launch_id, provider_event_id)
+        is_duplicate = existing is not None
+        if existing:
+            event_id = existing.id
+
+    if not is_duplicate:
+        event = OperationalEvent(
+            launch_id=launch_id,
+            event_type=mapped_type,
+            provider_event_id=provider_event_id,
+            payload={
+                "provider": "smartlead",
+                "provider_event_id": sl_event_id,
+                "smartlead_event_type": event_type,
+                "campaign_id": sl_campaign_id,
+                "lead_email": data.get("email") or data.get("to_email") or "",
+                "lead_id": data.get("lead_id"),
+            },
+        )
+        db.add(event)
+        try:
+            db.commit()
+            event_id = event.id
+        except IntegrityError:
+            db.rollback()
+            is_duplicate = True
+
+        if not is_duplicate:
+            logger.info("Created %s event for launch=%s from Smartlead webhook", mapped_type, launch_id)
+
+    # --- Side effects run regardless of duplicate status (all idempotent) ---
+
+    lead_email = (data.get("email") or data.get("to_email") or "").lower()
+
+    # Prospect status update (idempotent: only advances status, never regresses)
+    if lead_email and campaign:
+        from app.models.campaign_prospect import CampaignProspect
+        prospect = (
+            db.query(CampaignProspect)
+            .filter_by(campaign_id=campaign.id, email=lead_email)
+            .first()
+        )
+        if prospect:
+            now = datetime.now(timezone.utc)
+            if mapped_type == "email_sent" and prospect.status == "pending":
+                prospect.status = "sent"
+                prospect.sent_at = prospect.sent_at or now
+            elif mapped_type == "email_bounced" and prospect.status != "bounced":
+                prospect.status = "bounced"
+                prospect.bounced_at = prospect.bounced_at or now
+            elif mapped_type == "email_replied" and prospect.status != "replied":
+                prospect.status = "replied"
+                prospect.replied_at = prospect.replied_at or now
+            elif mapped_type == "email_unsubscribed" and prospect.status != "unsubscribed":
+                prospect.status = "unsubscribed"
+            db.commit()
+
+    # Recompute campaign counters from OperationalEvent count (idempotent)
+    if campaign:
+        from sqlalchemy import func
+        for evt_type, col_name in [
+            ("email_sent", "total_sent"),
+            ("email_bounced", "total_bounced"),
+            ("email_replied", "total_replied"),
+            ("email_unsubscribed", "total_unsubscribed"),
+        ]:
+            count = (
+                db.query(func.count(OperationalEvent.id))
+                .filter(
+                    OperationalEvent.launch_id == launch_id,
+                    OperationalEvent.event_type == evt_type,
+                    OperationalEvent.payload["campaign_id"].as_string() == sl_campaign_id,
+                )
+                .scalar()
+            ) or 0
+            setattr(campaign, col_name, count)
+        db.commit()
+
+    # Bounces: add to suppression list (upsert, idempotent) + check bounce rate
+    if mapped_type == "email_bounced" and lead_email:
+        from app.services.suppression_service import add_suppression
+        add_suppression(
+            db,
+            user_id=launch.user_id,
+            email=lead_email,
+            reason="bounce",
+            source_provider="smartlead",
+            source_campaign_id=campaign.id if campaign else None,
+            provider_event_id=sl_event_id,
+        )
+        db.commit()
+
+        from app.services.bounce_detector import check_and_pause
+        check_and_pause(db, launch_id)
+
+    # Replies: enqueue triage_campaign_reply task (idempotency key prevents double)
+    if mapped_type == "email_replied" and lead_email:
+        _enqueue_campaign_reply_triage(db, launch, data, sl_event_id, campaign)
+
+    # Unsubscribes: add to suppression list (upsert, idempotent)
+    if mapped_type == "email_unsubscribed" and lead_email:
+        from app.services.suppression_service import add_suppression
+        add_suppression(
+            db,
+            user_id=launch.user_id,
+            email=lead_email,
+            reason="unsubscribe",
+            source_provider="smartlead",
+            source_campaign_id=campaign.id if campaign else None,
+            provider_event_id=sl_event_id,
+        )
+        db.commit()
+
+    return {
+        "status": "processed" if not is_duplicate else "repaired",
+        "event_type": mapped_type,
+        "event_id": event_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Campaign reply triage helper
+# ---------------------------------------------------------------------------
+
+
+def _enqueue_campaign_reply_triage(
+    db: Session,
+    launch,
+    payload: dict,
+    provider_event_id: str,
+    campaign=None,
+) -> None:
+    """Enqueue a triage_campaign_reply task for a prospect reply.
+
+    Uses a dedicated task type (not triage_inbox) because cold outreach
+    replies are qualification conversations, not support tickets. The prompt
+    branches on reply intent: interested, objection, unsubscribe, OOO.
+    """
+    from app.services.agent_task_service import create_task
+    from app.services.task_enqueue import enqueue_task
+
+    lead_email = (payload.get("email") or payload.get("to_email") or payload.get("lead_email") or "").lower()
+    reply_body = payload.get("reply_text") or payload.get("body") or payload.get("message") or ""
+    idem_key = f"campaign_reply:{provider_event_id}" if provider_event_id else None
+
+    try:
+        task = create_task(
+            db,
+            idea_id=launch.idea_id,
+            user_id=launch.user_id,
+            task_type="triage_campaign_reply",
+            idempotency_key=idem_key,
+            input_params={
+                "from_email": lead_email,
+                "reply_body": reply_body[:5000],
+                "campaign_id": campaign.id if campaign else None,
+                "sequence_step": payload.get("sequence_number"),
+                "subject": payload.get("subject") or "",
+                "provider_event_id": provider_event_id,
+            },
+        )
+        task.launch_id = launch.id
+        task.agent_type = "marketing"
+
+        if task.status == "queued":
+            enqueue_task(db, task)
+        else:
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Failed to create/enqueue triage_campaign_reply for launch=%s",
+            launch.id,
+        )
+
+
+# ---------------------------------------------------------------------------
+# ShellMail webhook (inbound support email)
+# ---------------------------------------------------------------------------
+
+
+def _verify_shellmail_signature(body: bytes, signature: str | None) -> None:
+    """Verify ShellMail webhook HMAC-SHA256 signature."""
+    if not settings.SHELLMAIL_WEBHOOK_SECRET:
+        raise HTTPException(503, "ShellMail webhook secret not configured")
+    if not signature:
+        raise HTTPException(401, "Missing X-ShellMail-Signature header")
+
+    expected = hmac.new(
+        settings.SHELLMAIL_WEBHOOK_SECRET.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(401, "Invalid ShellMail signature")
+
+
+@router.post("/shellmail", status_code=200)
+async def shellmail_webhook(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_shellmail_signature: str | None = Header(None, alias="x-shellmail-signature"),
+):
+    """Handle inbound support emails from ShellMail.
+
+    Creates an email_received event and enqueues a triage_inbox task,
+    same pattern as the Resend inbound handler.
+    """
+    body = await request.body()
+    _verify_shellmail_signature(body, x_shellmail_signature)
+
+    payload = await request.json()
+    data = payload.get("data") or payload
+
+    # Resolve launch from inbox address
+    inbox_address = data.get("to") or data.get("recipient") or ""
+    sm_event_id = payload.get("event_id") or payload.get("id") or ""
+
+    # Look up launch by matching the ShellMail inbox stored in project secrets
+    launch_id = None
+    launch = None
+    if inbox_address:
+        from app.models.project_secret import ProjectSecret
+        from app.services.secret_service import decrypt_value
+        # Find the secret that stores this ShellMail inbox address
+        secrets = (
+            db.query(ProjectSecret)
+            .filter(ProjectSecret.key_name == "SHELLMAIL_SUPPORT_ADDRESS")
+            .all()
+        )
+        for secret in secrets:
+            try:
+                decrypted = decrypt_value(secret.encrypted_value)
+                if decrypted.lower() == inbox_address.lower():
+                    from app.models.launch_instance import LaunchInstance as LI
+                    li = db.query(LI).filter_by(idea_id=secret.idea_id, status="active").first()
+                    if li:
+                        launch_id = li.id
+                        launch = li
+                        break
+            except Exception:
+                continue
+
+    if not launch_id or not launch:
+        logger.warning("ShellMail webhook: could not resolve launch for inbox %s", inbox_address)
+        return {"status": "skipped", "reason": "no_launch_id"}
+
+    # Deduplicate
+    provider_event_id = f"sm:{sm_event_id}" if sm_event_id else None
+    if provider_event_id:
+        existing = _dedupe_by_provider_event_id(db, launch_id, provider_event_id)
+        if existing:
+            # Still try to enqueue triage (repair pattern)
+            pass
+        else:
+            event = OperationalEvent(
+                launch_id=launch_id,
+                event_type="email_received",
+                provider_event_id=provider_event_id,
+                payload={
+                    "provider": "shellmail",
+                    "provider_event_id": sm_event_id,
+                    "from": data.get("from") or data.get("sender") or "",
+                    "subject": data.get("subject") or "",
+                    "inbox": inbox_address,
+                },
+            )
+            db.add(event)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+
+    # Enqueue triage_inbox task (same pattern as Resend inbound)
+    from app.services.agent_task_service import create_task
+    from app.services.task_enqueue import enqueue_task
+
+    idem_key = f"triage:sm:{sm_event_id}" if sm_event_id else None
+
+    try:
+        task = create_task(
+            db,
+            idea_id=launch.idea_id,
+            user_id=launch.user_id,
+            task_type="triage_inbox",
+            idempotency_key=idem_key,
+            input_params={
+                "customer_email": data.get("from") or data.get("sender") or "",
+                "subject": data.get("subject") or "",
+                "body": data.get("text") or data.get("html") or data.get("body") or "",
+                "message_id": data.get("id") or data.get("message_id") or "",
+                "source_provider": "shellmail",
+            },
+        )
+        task.launch_id = launch_id
+        task.agent_type = "support"
+
+        if task.status == "queued":
+            enqueue_task(db, task)
+        else:
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create/enqueue triage_inbox for ShellMail launch=%s", launch_id)
+        raise HTTPException(503, "Failed to enqueue support triage task")
+
+    return {"status": "processed", "event_type": "email_received"}

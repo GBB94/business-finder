@@ -617,3 +617,109 @@ export interface CandidateListResponse {
   items: CandidateIdea[];
   total: number;
 }
+
+// ---------------------------------------------------------------------------
+// Marketing Campaigns
+// ---------------------------------------------------------------------------
+
+export type CampaignStatus = "draft" | "pending_approval" | "approved" | "active" | "paused" | "completed" | "blocked";
+export type CampaignChannel = "cold_email" | "social";
+export type AudienceType = "b2b" | "consumer" | "consumer_international";
+export type ProspectStatus = "pending" | "suppressed" | "sent" | "delivered" | "bounced" | "replied" | "unsubscribed";
+export type ComplianceClassification = "gdpr" | "uwg" | "casl" | "can_spam" | "pecr" | "unknown";
+
+export interface CampaignProspect {
+  id: string;
+  campaign_id: string;
+  launch_id: string | null;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  company: string | null;
+  country: string | null;
+  personalization_context: string | null;
+  source: string | null;
+  provider_lead_id: string | null;
+  status: ProspectStatus;
+  sequence_step: number;
+  sent_at: string | null;
+  delivered_at: string | null;
+  replied_at: string | null;
+  bounced_at: string | null;
+  reply_promoted_to_evidence: boolean;
+  created_at: string;
+}
+
+export interface MarketingCampaign {
+  id: string;
+  idea_id: string;
+  user_id: string;
+  launch_id: string | null;
+  name: string;
+  channel: CampaignChannel;
+  status: CampaignStatus;
+  audience_type: AudienceType | null;
+  target_countries: string[] | null;
+  cold_email_allowed: boolean;
+  compliance_blocks: { country: string; reason: string }[] | null;
+
+  // Provider
+  provider: string;
+  provider_campaign_id: string | null;
+  smartlead_email_account_id: string | null;
+  daily_limit: number;
+  sequence_steps: number;
+
+  // Stats
+  total_prospects: number;
+  total_sent: number;
+  total_delivered: number;
+  total_bounced: number;
+  total_replied: number;
+  total_unsubscribed: number;
+
+  // Compliance checklist
+  dns_authenticated: boolean;
+  dmarc_policy: boolean;
+  domain_warmup_complete: boolean;
+  list_unsubscribe_header_active: boolean;
+  commercial_ad_disclosure_present: boolean;
+  physical_address_included: boolean;
+  unsubscribe_link_verified: boolean;
+  audience_type_confirmed: boolean;
+  suppression_list_screened: boolean;
+
+  // Approval
+  approved_at: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+
+  // Social
+  platforms: string[] | null;
+  post_content: string | null;
+  scheduled_at: string | null;
+
+  created_at: string;
+  updated_at: string | null;
+  prospects?: CampaignProspect[];
+}
+
+export interface MarketingCampaignListResponse {
+  items: MarketingCampaign[];
+  total: number;
+}
+
+export interface EmailSuppression {
+  id: string;
+  email: string;
+  reason: string;
+  source_provider: string | null;
+  source_campaign_id: string | null;
+  synced_to_smartlead: boolean;
+  suppressed_at: string;
+}
+
+export interface SuppressionListResponse {
+  items: EmailSuppression[];
+  total: number;
+}

@@ -28,6 +28,38 @@ def decrypt_value(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
+def upsert_secret(
+    db: Session,
+    *,
+    idea_id: str,
+    user_id: str,
+    environment: str,
+    key_name: str,
+    value: str,
+) -> ProjectSecret:
+    """Insert or update a project secret."""
+    existing = (
+        db.query(ProjectSecret)
+        .filter_by(idea_id=idea_id, environment=environment, key_name=key_name)
+        .first()
+    )
+    if existing:
+        existing.encrypted_value = encrypt_value(value)
+        db.flush()
+        return existing
+
+    secret = ProjectSecret(
+        idea_id=idea_id,
+        user_id=user_id,
+        environment=environment,
+        key_name=key_name,
+        encrypted_value=encrypt_value(value),
+    )
+    db.add(secret)
+    db.flush()
+    return secret
+
+
 def get_secrets_for_task(
     db: Session,
     idea_id: str,

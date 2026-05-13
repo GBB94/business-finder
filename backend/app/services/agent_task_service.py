@@ -31,6 +31,8 @@ MODEL_TIERS: dict[str, str] = {
     "send_cold_emails": "haiku",
     "post_social": "haiku",
     "write_content": "sonnet",
+    "activate_campaign": "haiku",  # no LLM calls, just Smartlead API
+    "triage_campaign_reply": "haiku",  # classify reply intent
     # Support: triage on Haiku, response drafting on Haiku (cheap, high volume)
     "triage_inbox": "haiku",
     "draft_support_response": "haiku",
@@ -71,6 +73,8 @@ DEFAULT_TOKEN_BUDGETS: dict[str, int] = {
     "triage_inbox": 15_000,
     "draft_support_response": 20_000,
     "check_escalations": 5_000,
+    "activate_campaign": 5_000,  # no LLM calls
+    "triage_campaign_reply": 15_000,
 }
 
 
@@ -83,7 +87,7 @@ DEFAULT_STEPS: dict[str, list[str]] = {
     "consistency_check": ["gather_scores", "run_check", "store_result"],
     "review_summary": ["gather_metrics", "generate_summary", "store_result"],
     # LaunchPad tasks
-    "provision": ["create_github_repo", "provision_neon_db", "configure_render", "setup_resend", "create_stripe_product", "write_env_files"],
+    "provision": ["create_github_repo", "provision_neon_db", "configure_render", "setup_resend", "create_stripe_product", "write_env_files", "setup_smartlead_mailbox", "setup_shellmail_inbox"],
     "scaffold": ["generate_code", "commit_to_branch", "trigger_preview_build"],
     "deploy": ["push_to_preview", "run_smoke_tests", "record_deploy_event"],
     "promote": ["check_approval", "merge_to_main", "swap_env", "record_promotion"],
@@ -93,6 +97,8 @@ DEFAULT_STEPS: dict[str, list[str]] = {
     "send_cold_emails": ["check_budget", "generate_drafts", "store_drafts"],
     "post_social": ["check_budget", "generate_post", "store_post"],
     "write_content": ["check_budget", "generate_content", "store_content"],
+    "activate_campaign": ["check_budget", "bind_mailbox", "verify_compliance", "push_to_smartlead"],
+    "triage_campaign_reply": ["classify_reply", "execute_action", "store_result"],
     # Support tasks
     "triage_inbox": ["parse_inbound", "run_triage", "store_triage"],
     "draft_support_response": ["load_thread", "draft_response", "store_draft"],

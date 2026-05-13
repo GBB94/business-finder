@@ -1065,16 +1065,121 @@ def handle_metrics_write(db: Session, task: AgentTask, step: AgentTaskStep, inpu
 
 
 # ---------------------------------------------------------------------------
+# Smartlead reply backfill (called by CEO nightly collect step)
+# ---------------------------------------------------------------------------
+
+
+def _backfill_smartlead_replies(db: Session, launch_id: str, user_id: str) -> int:
+    """Poll Smartlead for unread replies and enqueue triage tasks for any missed by webhooks.
+
+    Uses idempotency keys to prevent double-triaging replies already processed
+    via the webhook path. Returns the number of new triage tasks enqueued.
+    """
+    from app.models.marketing_campaign import MarketingCampaign
+    from app.models.launch_instance import LaunchInstance
+    from app.services import smartlead_service as sl
+    from app.services.agent_task_service import create_task
+    from app.services.task_enqueue import enqueue_task
+
+    campaigns = (
+        db.query(MarketingCampaign)
+        .filter_by(launch_id=launch_id)
+        .filter(
+            MarketingCampaign.status.in_(["active", "paused"]),
+            MarketingCampaign.provider_campaign_id.isnot(None),
+        )
+        .all()
+    )
+
+    launch = db.query(LaunchInstance).filter_by(id=launch_id).first()
+    if not launch:
+        return 0
+
+    # Group campaigns by mailbox (email_account_id) to avoid duplicate API calls
+    mailbox_campaigns: dict[str, list] = {}
+    for campaign in campaigns:
+        acct_id = campaign.smartlead_email_account_id
+        if not acct_id:
+            continue
+        mailbox_campaigns.setdefault(acct_id, []).append(campaign)
+
+    enqueued = 0
+    for acct_id, acct_campaigns in mailbox_campaigns.items():
+        try:
+            campaign_ids = [int(c.provider_campaign_id) for c in acct_campaigns]
+            replies = asyncio.run(sl.get_unread_replies(
+                int(acct_id), campaign_ids=campaign_ids,
+            ))
+
+            # Build a lookup from provider_campaign_id to our campaign
+            sl_to_campaign = {c.provider_campaign_id: c for c in acct_campaigns}
+
+            for reply in replies:
+                reply_id = reply.get("id") or reply.get("message_id") or ""
+                if not reply_id:
+                    continue
+
+                # Match reply to campaign via Smartlead campaign_id in the reply
+                reply_sl_campaign = str(reply.get("campaign_id") or "")
+                campaign = sl_to_campaign.get(reply_sl_campaign) or acct_campaigns[0]
+
+                idem_key = f"triage_reply:{campaign.id}:{reply_id}"
+                # Use the same key names the triage handler reads:
+                # from_email, reply_body, subject
+                task = create_task(
+                    db,
+                    idea_id=campaign.idea_id,
+                    user_id=user_id,
+                    task_type="triage_campaign_reply",
+                    idempotency_key=idem_key,
+                    input_params={
+                        "campaign_id": campaign.id,
+                        "from_email": (reply.get("from_email") or reply.get("email") or "").lower(),
+                        "reply_body": reply.get("body") or reply.get("text") or "",
+                        "subject": reply.get("subject") or "",
+                        "provider_event_id": str(reply_id),
+                        "source": "backfill",
+                    },
+                )
+                task.launch_id = launch_id
+                task.agent_type = "marketing"
+
+                if task.status == "queued":
+                    if enqueue_task(db, task):
+                        enqueued += 1
+
+                # Mark as read on Smartlead to prevent re-fetching
+                # mark_reply_read() takes only reply_id (not campaign_id)
+                try:
+                    asyncio.run(sl.mark_reply_read(int(reply_id)))
+                except Exception:
+                    pass  # non-critical
+
+        except Exception:
+            logger.warning("Reply backfill failed for mailbox %s", acct_id)
+
+    return enqueued
+
+
+# ---------------------------------------------------------------------------
 # LaunchPad: ceo_nightly handlers
 # ---------------------------------------------------------------------------
 
 
 def handle_ceo_collect(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
-    """Collect metrics before CEO evaluation and check for error spikes."""
+    """Collect metrics before CEO evaluation, check for error spikes, and
+    backfill any Smartlead replies that webhooks may have missed."""
     from datetime import date as date_type
     from app.services.metrics_collector import collect_daily_metrics
     from app.services.error_spike_detector import check_error_spike
     today = date_type.today()
+
+    reply_backfill_count = 0
+    try:
+        reply_backfill_count = _backfill_smartlead_replies(db, task.launch_id, task.user_id)
+    except Exception as e:
+        logger.warning("Smartlead reply backfill failed for launch=%s: %s", task.launch_id, e)
+
     try:
         metrics = collect_daily_metrics(db, task.launch_id, today)
         spike = check_error_spike(db, task.launch_id)
@@ -1082,10 +1187,11 @@ def handle_ceo_collect(db: Session, task: AgentTask, step: AgentTaskStep, input_
             "metrics_id": metrics.id,
             "date": today.isoformat(),
             "error_spike_detected": spike is not None,
+            "reply_backfill_count": reply_backfill_count,
         }
     except Exception as e:
         logger.warning("Metrics collection failed for CEO eval: %s", e)
-        return {"error": str(e), "date": today.isoformat()}
+        return {"error": str(e), "date": today.isoformat(), "reply_backfill_count": reply_backfill_count}
 
 
 def handle_ceo_context(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
@@ -1155,6 +1261,117 @@ def handle_ceo_log(db: Session, task: AgentTask, step: AgentTaskStep, input_data
 
 
 # ---------------------------------------------------------------------------
+# Provision: Smartlead mailbox + ShellMail inbox
+# ---------------------------------------------------------------------------
+
+
+def handle_provision_smartlead_mailbox(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Register a sending mailbox with Smartlead and store credentials.
+
+    Reads SMTP credentials from ProjectSecret, registers the mailbox
+    with Smartlead (warmup enabled), and stores the Smartlead account ID.
+    """
+    from app.models.project_secret import ProjectSecret
+    from app.services.secret_service import decrypt_value, upsert_secret
+    from app.services import smartlead_service as sl
+    from app.config import settings as app_settings
+
+    launch_id = task.launch_id
+    idea_id = task.idea_id
+    if not idea_id:
+        raise ValueError("Provision task requires an idea_id")
+
+    # Read SMTP credentials from project secrets
+    env = (task.input_params or {}).get("environment", "prod")
+
+    def _get_secret(key: str) -> str:
+        secret = (
+            db.query(ProjectSecret)
+            .filter_by(idea_id=idea_id, environment=env, key_name=key)
+            .first()
+        )
+        if not secret:
+            raise ValueError(f"Missing project secret: {key} (env={env})")
+        return decrypt_value(secret.encrypted_value)
+
+    smtp_host = _get_secret("SMTP_HOST") if not app_settings.SMTP_HOST else app_settings.SMTP_HOST
+    smtp_port = int(_get_secret("SMTP_PORT")) if not app_settings.SMTP_PORT else app_settings.SMTP_PORT
+    smtp_user = _get_secret("SMTP_USERNAME")
+    smtp_pass = _get_secret("SMTP_PASSWORD")
+    from_email = _get_secret("SENDING_EMAIL")
+    from_name = (task.input_params or {}).get("from_name", "Support")
+
+    result = asyncio.run(sl.add_email_account(
+        from_name=from_name,
+        from_email=from_email,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        username=smtp_user,
+        password=smtp_pass,
+        warmup_enabled=True,
+        warmup_limit=app_settings.WARMUP_EMAILS_PER_DAY,
+    ))
+
+    account_id = result.get("id") or result.get("email_account_id")
+    if account_id:
+        upsert_secret(db, idea_id=idea_id, user_id=task.user_id,
+                       environment=env, key_name="SMARTLEAD_EMAIL_ACCOUNT_ID",
+                       value=str(account_id))
+
+    return {
+        "provider": "smartlead",
+        "account_id": account_id,
+        "from_email": from_email,
+        "warmup_enabled": True,
+    }
+
+
+def handle_provision_shellmail_inbox(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Create a ShellMail support inbox for the project.
+
+    Creates the inbox on ShellMail with our webhook URL, and stores
+    the inbox address and ID in ProjectSecret.
+    """
+    from app.services import shellmail_service as sm
+    from app.services.secret_service import upsert_secret
+    from app.config import settings as app_settings
+
+    launch_id = task.launch_id
+    idea_id = task.idea_id
+    if not idea_id:
+        raise ValueError("Provision task requires an idea_id")
+
+    env = (task.input_params or {}).get("environment", "prod")
+    project_name = (task.input_params or {}).get("project_name", f"project-{idea_id[:8]}")
+    domain = app_settings.SENDING_ROOT_DOMAIN or "mail.example.com"
+    inbox_address = f"support@{project_name}.{domain}"
+    webhook_base = (task.input_params or {}).get("webhook_base_url", "")
+    webhook_url = f"{webhook_base}/api/webhooks/shellmail" if webhook_base else None
+
+    result = asyncio.run(sm.create_inbox(
+        address=inbox_address,
+        display_name=f"{project_name} Support",
+        webhook_url=webhook_url,
+    ))
+
+    inbox_id = result.get("id") or result.get("inbox_id")
+    if inbox_id:
+        upsert_secret(db, idea_id=idea_id, user_id=task.user_id,
+                       environment=env, key_name="SHELLMAIL_SUPPORT_INBOX_ID",
+                       value=str(inbox_id))
+    upsert_secret(db, idea_id=idea_id, user_id=task.user_id,
+                   environment=env, key_name="SHELLMAIL_SUPPORT_ADDRESS",
+                   value=inbox_address)
+
+    return {
+        "provider": "shellmail",
+        "inbox_id": inbox_id,
+        "inbox_address": inbox_address,
+        "webhook_url": webhook_url,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Marketing: shared budget check handler
 # ---------------------------------------------------------------------------
 
@@ -1194,6 +1411,135 @@ def handle_marketing_check_budget(db: Session, task: AgentTask, step: AgentTaskS
         "daily_remaining_cents": result["daily"]["remaining_cents"],
         "monthly_remaining_cents": result["monthly"]["remaining_cents"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Marketing: activate_campaign handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_activate_bind_mailbox(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Load the provisioned SMARTLEAD_EMAIL_ACCOUNT_ID and bind it to the campaign.
+
+    Smartlead is mailbox-centric: campaigns cannot send without a bound
+    sending account. This step reads the account ID from ProjectSecret
+    (written by handle_provision_smartlead_mailbox) and attaches it.
+    """
+    from app.models.project_secret import ProjectSecret
+    from app.services.secret_service import decrypt_value
+    from app.services import smartlead_service as sl
+    from app.models.marketing_campaign import MarketingCampaign
+
+    params = task.input_params or {}
+    campaign_id = params.get("campaign_id")
+    if not campaign_id:
+        raise ValueError("activate_campaign task requires campaign_id in input_params")
+
+    campaign = db.query(MarketingCampaign).filter_by(id=campaign_id).first()
+    if not campaign:
+        raise ValueError(f"Campaign {campaign_id} not found")
+
+    idea_id = task.idea_id or campaign.idea_id
+    env = params.get("environment", "prod")
+
+    # Load SMARTLEAD_EMAIL_ACCOUNT_ID from project secrets
+    secret = (
+        db.query(ProjectSecret)
+        .filter_by(idea_id=idea_id, environment=env, key_name="SMARTLEAD_EMAIL_ACCOUNT_ID")
+        .first()
+    )
+    if not secret:
+        raise ValueError(
+            f"No SMARTLEAD_EMAIL_ACCOUNT_ID found in project secrets for idea={idea_id} env={env}. "
+            f"Run the provision task with setup_smartlead_mailbox first."
+        )
+
+    account_id = int(decrypt_value(secret.encrypted_value))
+
+    # Store the account ID on the campaign so push_to_smartlead can bind
+    # it after creating the Smartlead campaign but before starting it.
+    campaign.smartlead_email_account_id = str(account_id)
+    db.commit()
+
+    return {
+        "smartlead_account_id": account_id,
+        "campaign_id": campaign_id,
+    }
+
+
+def handle_activate_verify_compliance(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Verify all 8 compliance checklist flags before activation.
+
+    Fails the step (and therefore the task) if any flag is missing,
+    if cold_email_allowed is False, or if no mailbox is bound.
+    """
+    from app.services.marketing_agent import run_cold_email_campaign
+
+    params = task.input_params or {}
+    campaign_id = params.get("campaign_id")
+    if not campaign_id:
+        raise ValueError("activate_campaign task requires campaign_id in input_params")
+
+    result = asyncio.run(run_cold_email_campaign(db, campaign_id))
+    if not result["ready"]:
+        raise ValueError(
+            "Campaign failed compliance verification: " + "; ".join(result["errors"])
+        )
+
+    return result
+
+
+def handle_activate_push_to_smartlead(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Create the Smartlead campaign, bind mailbox, upload leads, and start sending.
+
+    Order: create campaign -> bind mailbox -> upload leads -> start campaign.
+    The mailbox MUST be bound before the campaign starts.
+    """
+    from app.services.marketing_agent import activate_campaign_on_smartlead
+    from app.services import smartlead_service as sl
+    from app.models.marketing_campaign import MarketingCampaign
+
+    params = task.input_params or {}
+    campaign_id = params.get("campaign_id")
+    sequences = params.get("sequences", [])
+    if not campaign_id:
+        raise ValueError("activate_campaign task requires campaign_id in input_params")
+
+    # Read the account ID stored by bind_mailbox on the campaign
+    campaign = db.query(MarketingCampaign).filter_by(id=campaign_id).first()
+    if not campaign:
+        raise ValueError(f"Campaign {campaign_id} not found")
+
+    account_id = campaign.smartlead_email_account_id
+    if not account_id:
+        raise ValueError(
+            "No smartlead_email_account_id on campaign. "
+            "The bind_mailbox step must complete first."
+        )
+
+    # activate_campaign_on_smartlead creates the campaign, saves sequences,
+    # uploads leads, but we intercept BEFORE it starts the campaign so we
+    # can bind the mailbox first.
+    result = asyncio.run(activate_campaign_on_smartlead(
+        db, campaign_id, sequences, skip_start=True,
+    ))
+
+    # Bind the mailbox BEFORE starting the campaign
+    sl_campaign_id = result.get("provider_campaign_id")
+    if not sl_campaign_id:
+        raise RuntimeError("activate_campaign_on_smartlead did not return provider_campaign_id")
+
+    asyncio.run(sl.add_email_account_to_campaign(int(sl_campaign_id), int(account_id)))
+
+    # NOW start the campaign
+    asyncio.run(sl.update_campaign_status(int(sl_campaign_id), "START"))
+
+    # Update local status
+    campaign.status = "active"
+    db.commit()
+
+    result["status"] = "active"
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1367,6 +1713,157 @@ def handle_store_content(db: Session, task: AgentTask, step: AgentTaskStep, inpu
             "model_version": data["model_version"],
             "tokens_used": data["tokens_used"],
             "raw_response": data["raw_response"][:10000],
+        },
+    )
+    db.add(event)
+    db.flush()
+
+    return {"event_id": event.id, "stored": True}
+
+
+# ---------------------------------------------------------------------------
+# Marketing: triage_campaign_reply handlers
+# ---------------------------------------------------------------------------
+
+
+def handle_classify_reply(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Classify a cold outreach reply by intent using Claude Haiku.
+
+    Intent categories:
+    - interested: wants to learn more, asks about pricing, requests demo
+    - objection: not now, wrong timing, not relevant
+    - unsubscribe: explicit opt-out request
+    - out_of_office: auto-reply, OOO
+    """
+    import anthropic
+    from app.config import settings
+
+    params = task.input_params or {}
+    from_email = params.get("from_email", "")
+    reply_body = params.get("reply_body", "")
+    subject = params.get("subject", "")
+
+    model = task.model_used or settings.CLAUDE_MODEL_HAIKU
+    client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+    response = client.messages.create(
+        model=model,
+        max_tokens=512,
+        messages=[{
+            "role": "user",
+            "content": (
+                "Classify this cold email reply by intent. Return JSON with "
+                "'intent' (one of: interested, objection, unsubscribe, out_of_office) "
+                "and 'confidence' (0.0-1.0) and 'summary' (one sentence).\n\n"
+                f"From: {from_email}\n"
+                f"Subject: {subject}\n"
+                f"Body:\n{reply_body[:2000]}\n\n"
+                "JSON only, no explanation."
+            ),
+        }],
+    )
+
+    step.tokens_used = response.usage.input_tokens + response.usage.output_tokens
+
+    import json
+    try:
+        result = json.loads(response.content[0].text)
+    except (json.JSONDecodeError, IndexError):
+        result = {"intent": "objection", "confidence": 0.5, "summary": "Could not parse reply"}
+
+    return {
+        "intent": result.get("intent", "objection"),
+        "confidence": result.get("confidence", 0.5),
+        "summary": result.get("summary", ""),
+        "from_email": from_email,
+        "tokens_used": step.tokens_used,
+    }
+
+
+def handle_reply_execute_action(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Execute the action for a classified campaign reply.
+
+    - interested: flag as qualified lead, promote reply to IdeaScope evidence
+    - objection: log, do not escalate
+    - unsubscribe: add to suppression list, update prospect status
+    - out_of_office: ignore, do not create thread
+    """
+    prev_step = next(
+        (s for s in task.steps if s.step_name == "classify_reply" and s.status == "completed"),
+        None,
+    )
+    if not prev_step or not prev_step.output_data:
+        raise ValueError("classify_reply step must complete first")
+
+    classification = prev_step.output_data
+    intent = classification.get("intent", "objection")
+    from_email = classification.get("from_email", "")
+    params = task.input_params or {}
+    campaign_id = params.get("campaign_id")
+
+    action_taken = intent  # default
+
+    if intent == "unsubscribe" and from_email:
+        from app.services.suppression_service import add_suppression
+        add_suppression(
+            db,
+            user_id=task.user_id,
+            email=from_email,
+            reason="unsubscribe",
+            source_provider="smartlead",
+            source_campaign_id=campaign_id,
+        )
+        db.commit()
+        action_taken = "unsubscribed_and_suppressed"
+
+    if intent == "interested" and from_email and campaign_id:
+        # Mark prospect as qualified for evidence promotion
+        from app.models.campaign_prospect import CampaignProspect
+        prospect = (
+            db.query(CampaignProspect)
+            .filter_by(campaign_id=campaign_id, email=from_email)
+            .first()
+        )
+        if prospect:
+            prospect.reply_promoted_to_evidence = True
+            db.commit()
+        action_taken = "flagged_as_qualified"
+
+    return {
+        "intent": intent,
+        "action_taken": action_taken,
+        "from_email": from_email,
+        "campaign_id": campaign_id,
+    }
+
+
+def handle_reply_store_result(db: Session, task: AgentTask, step: AgentTaskStep, input_data: dict | None) -> dict:
+    """Store campaign reply classification as an OperationalEvent."""
+    from app.models.operational_event import OperationalEvent
+
+    classify_step = next(
+        (s for s in task.steps if s.step_name == "classify_reply" and s.status == "completed"),
+        None,
+    )
+    action_step = next(
+        (s for s in task.steps if s.step_name == "execute_action" and s.status == "completed"),
+        None,
+    )
+
+    classification = classify_step.output_data if classify_step else {}
+    action = action_step.output_data if action_step else {}
+
+    event = OperationalEvent(
+        launch_id=task.launch_id,
+        event_type="campaign_reply_triaged",
+        payload={
+            "task_id": task.id,
+            "intent": classification.get("intent"),
+            "confidence": classification.get("confidence"),
+            "summary": classification.get("summary"),
+            "action_taken": action.get("action_taken"),
+            "from_email": action.get("from_email"),
+            "campaign_id": action.get("campaign_id"),
         },
     )
     db.add(event)
@@ -1749,6 +2246,8 @@ HANDLER_REGISTRY: dict[tuple[str, str], object] = {
     ("provision", "setup_resend"): handle_provision_step,
     ("provision", "create_stripe_product"): handle_provision_step,
     ("provision", "write_env_files"): handle_provision_step,
+    ("provision", "setup_smartlead_mailbox"): handle_provision_smartlead_mailbox,
+    ("provision", "setup_shellmail_inbox"): handle_provision_shellmail_inbox,
     # LaunchPad: scaffold
     ("scaffold", "generate_code"): handle_scaffold_generate,
     ("scaffold", "commit_to_branch"): handle_scaffold_commit,
@@ -1771,6 +2270,15 @@ HANDLER_REGISTRY: dict[tuple[str, str], object] = {
     ("ceo_nightly", "build_context"): handle_ceo_context,
     ("ceo_nightly", "evaluate_state"): handle_ceo_evaluate,
     ("ceo_nightly", "write_daily_log"): handle_ceo_log,
+    # Marketing: activate_campaign
+    ("activate_campaign", "check_budget"): handle_marketing_check_budget,
+    ("activate_campaign", "bind_mailbox"): handle_activate_bind_mailbox,
+    ("activate_campaign", "verify_compliance"): handle_activate_verify_compliance,
+    ("activate_campaign", "push_to_smartlead"): handle_activate_push_to_smartlead,
+    # Marketing: triage_campaign_reply
+    ("triage_campaign_reply", "classify_reply"): handle_classify_reply,
+    ("triage_campaign_reply", "execute_action"): handle_reply_execute_action,
+    ("triage_campaign_reply", "store_result"): handle_reply_store_result,
     # Marketing: send_cold_emails
     ("send_cold_emails", "check_budget"): handle_marketing_check_budget,
     ("send_cold_emails", "generate_drafts"): handle_generate_drafts,

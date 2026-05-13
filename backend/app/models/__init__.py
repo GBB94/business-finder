@@ -21,6 +21,9 @@ from app.models.support_thread import SupportThread
 from app.models.watchlist_entry import WatchlistEntry
 from app.models.candidate_idea import CandidateIdea
 from app.models.candidate_source_post import CandidateSourcePost
+from app.models.email_suppression import EmailSuppression
+from app.models.marketing_campaign import MarketingCampaign
+from app.models.campaign_prospect import CampaignProspect
 
 __all__ = [
     "User",
@@ -46,4 +49,7 @@ __all__ = [
     "WatchlistEntry",
     "CandidateIdea",
     "CandidateSourcePost",
+    "EmailSuppression",
+    "MarketingCampaign",
+    "CampaignProspect",
 ]

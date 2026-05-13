@@ -25,6 +25,7 @@ from app.routers import (
     support,
     watchlist,
     candidates,
+    marketing,
 )
 
 
@@ -141,3 +142,4 @@ app.include_router(webhooks.router)
 app.include_router(support.router)
 app.include_router(watchlist.router)
 app.include_router(candidates.router)
+app.include_router(marketing.router)

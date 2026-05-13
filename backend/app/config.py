@@ -45,6 +45,23 @@ class Settings(BaseSettings):
     RESEND_WEBHOOK_SECRET: str = ""  # Resend webhook signing secret
     STRIPE_WEBHOOK_SECRET: str = ""  # Stripe webhook signing secret (whsec_...)
 
+    # Smartlead (cold outbound)
+    SMARTLEAD_API_KEY: str = ""
+    SMARTLEAD_WEBHOOK_SECRET: str = ""
+
+    # ShellMail (product support inbox)
+    SHELLMAIL_API_KEY: str = ""
+    SHELLMAIL_WEBHOOK_SECRET: str = ""
+
+    # Apollo.io (B2B prospect search)
+    APOLLO_API_KEY: str = ""
+
+    # Outbound email infra
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SENDING_ROOT_DOMAIN: str = ""  # e.g. "mail.example.com"
+    WARMUP_EMAILS_PER_DAY: int = 5  # per-mailbox warmup ramp
+
     # Engineering task isolation
     WORKDIR_BASE: str = "/tmp/launchpad-workdirs"  # base path for ephemeral task workdirs
     BUILDER_UID: int = 0   # 0 = no chown (dev mode); set to unprivileged UID in production

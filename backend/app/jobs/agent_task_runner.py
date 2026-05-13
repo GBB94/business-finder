@@ -57,6 +57,8 @@ TASK_QUEUE_MAP: dict[str, str] = {
     "triage_inbox": "support",
     "draft_support_response": "support",
     "check_escalations": "support",
+    "activate_campaign": "marketing",
+    "triage_campaign_reply": "marketing",
 }
 
 def _queue_for_task(task_type: str) -> str:
@@ -69,8 +71,7 @@ def _queue_for_task(task_type: str) -> str:
 # grant first; "always_approve" always pauses for explicit approval.
 APPROVE_ONCE_TYPES: set[str] = {
     "scaffold", "deploy",
-    # Note: send_cold_emails and post_social only generate drafts in Phase 2.
-    # Approval gates will be added when send/publish steps are implemented.
+    "activate_campaign",  # campaign activation sends real email via Smartlead
 }
 ALWAYS_APPROVE_TYPES: set[str] = {
     "promote",

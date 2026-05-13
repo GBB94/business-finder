@@ -50,6 +50,10 @@ class ResolveThreadRequest(BaseModel):
     pass
 
 
+class SupportReplyRequest(BaseModel):
+    body: str
+
+
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _get_launch_or_404(launch_id: str, user_id: str, db: Session) -> LaunchInstance:
@@ -117,3 +121,69 @@ def resolve_thread(
     db.commit()
     db.refresh(thread)
     return SupportThreadResponse.model_validate(thread)
+
+
+@router.post("/{launch_id}/support-threads/{thread_id}/reply", status_code=202)
+def reply_to_support_thread(
+    launch_id: str,
+    thread_id: str,
+    body: SupportReplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Reply to a support thread via ShellMail."""
+    import asyncio
+
+    launch = _get_launch_or_404(launch_id, current_user.id, db)
+    thread = db.query(SupportThread).filter_by(id=thread_id, launch_id=launch_id).first()
+    if not thread:
+        raise HTTPException(404, "Support thread not found")
+
+    # Look up the ShellMail inbox for this launch
+    from app.models.project_secret import ProjectSecret
+    from app.services.secret_service import decrypt_value
+
+    inbox_secret = (
+        db.query(ProjectSecret)
+        .filter_by(idea_id=launch.idea_id, key_name="SHELLMAIL_SUPPORT_INBOX_ID")
+        .first()
+    )
+    if not inbox_secret:
+        raise HTTPException(400, "No ShellMail inbox configured for this project")
+
+    inbox_id = decrypt_value(inbox_secret.encrypted_value)
+
+    # The thread stores the ShellMail thread/message ID in its messages list
+    # or we can derive it from the thread's external references
+    shellmail_thread_id = None
+    if thread.messages:
+        for msg in reversed(thread.messages):
+            if isinstance(msg, dict) and msg.get("shellmail_thread_id"):
+                shellmail_thread_id = msg["shellmail_thread_id"]
+                break
+
+    if not shellmail_thread_id:
+        raise HTTPException(400, "No ShellMail thread ID found on this support thread")
+
+    from app.services import shellmail_service as sm
+
+    try:
+        asyncio.run(sm.reply(inbox_id, shellmail_thread_id, body.body))
+    except Exception:
+        logger.exception("Failed to send ShellMail reply for thread %s", thread_id)
+        raise HTTPException(502, "Failed to send reply via ShellMail")
+
+    # Append the outbound reply to the thread's message history
+    if thread.messages is None:
+        thread.messages = []
+    thread.messages = thread.messages + [{
+        "direction": "outbound",
+        "body": body.body,
+        "sent_at": datetime.utcnow().isoformat(),
+        "sent_by": current_user.id,
+    }]
+    thread.message_count = len(thread.messages)
+    thread.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"status": "sent", "thread_id": thread_id}
